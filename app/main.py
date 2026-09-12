@@ -3,6 +3,14 @@ import time
 import hashlib
 import asyncio
 from fastapi import FastAPI, Query
+from collections import deque
+import psutil
+
+# Add this global tracking state
+current_process = psutil.Process(os.getpid()) 
+active_requests: int = 0
+latency_window: deque = deque(maxlen=50)
+
 
 # Read tier configuration from environment variables
 TIER_NAME = os.getenv("TIER_NAME", "local")
@@ -55,11 +63,16 @@ def health_check():
 async def process_workload(
     iterations: int = Query(default=150000, description="Number of hashing iterations (controls CPU duration)")
 ):
-    """
-    CPU-bound workload endpoint.
-    Runs computation in a separate thread so the async event loop can still handle other requests.
-    """
-    result = await asyncio.to_thread(run_cpu_bound_task, iterations)
+    global active_requests
+    active_requests += 1
+    start_time = time.perf_counter()
+    try:
+        result = await asyncio.to_thread(run_cpu_bound_task, iterations)
+    finally:
+        active_requests -= 1
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        latency_window.append(elapsed_ms)
+
     return {
         "tier": TIER_NAME,
         **result
