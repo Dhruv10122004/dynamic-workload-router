@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # -------------------------------------------------------------
+  # EDGE TIER: Highly constrained compute (e.g. IoT Gateway)
+  # -------------------------------------------------------------
+  edge:
+    build: .
+    container_name: workload-edge
+    restart: unless-stopped
+    environment:
+      - TIER_NAME=edge
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    cpus: 0.25
+    mem_limit: 128m
+
+  # -------------------------------------------------------------
+  # FOG TIER: Moderate compute (e.g. Local on-premise server)
+  # -------------------------------------------------------------
+  fog:
+    build: .
+    container_name: workload-fog
+    restart: unless-stopped
+    environment:
+      - TIER_NAME=fog
+    ports:
+      - "8002:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+    cpus: 0.50
+    mem_limit: 256m
+
+  # -------------------------------------------------------------
+  # CLOUD TIER: High compute capacity (e.g. AWS/GCP Instance)
+  # -------------------------------------------------------------
+  cloud:
+    build: .
+    container_name: workload-cloud
+    restart: unless-stopped
+    environment:
+      - TIER_NAME=cloud
+    ports:
+      - "8003:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.00'
+          memory: 1024M
+    cpus: 2.00
+    mem_limit: 1024m
