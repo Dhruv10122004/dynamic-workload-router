@@ -77,3 +77,19 @@ async def process_workload(
         "tier": TIER_NAME,
         **result
     }
+
+@app.get("/stats")
+def get_stats():
+    """Polled by Teammate B's Decision Engine"""
+    avg_latency = (
+        round(sum(latency_window) / len(latency_window), 2)
+        if latency_window
+        else 0.0
+    )
+    return {
+        "tier": TIER_NAME,
+        "cpu_percent": current_process.cpu_percent(interval=None),
+        "active_requests": active_requests,
+        "avg_latency_ms": avg_latency,
+        "uptime_seconds": round(time.time() - START_TIME, 2)
+    }
