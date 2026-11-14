@@ -51,7 +51,9 @@ Every job state change goes through shared/states.py `transition()`.
 - Setup: `py -3.11 -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt`
 - Tests: `.\.venv\Scripts\python -m pytest` (unit + integration + legacy)
 - Unit only: `.\.venv\Scripts\python -m pytest tests/unit`
-- Controller: `.\.venv\Scripts\python -m controller` (reads .env)
-- Worker agent: `.\.venv\Scripts\python -m worker.agent [--env-file path]`
+- First-time Windows setup: `.\scripts\setup.ps1 -BindIp <lan-ip>`
+- Start/stop controller + Edge agent: `.\scripts\start.ps1 [-Sim]`, `.\scripts\stop.ps1`
+- Controller by hand: `.\.venv\Scripts\python -m controller` (reads .env)
+- Worker agent by hand: `.\.venv\Scripts\python -m worker.agent [--env-file path]`
 - Linux worker: `./scripts/setup.sh`, then `.venv/bin/python -m worker.agent`
 Note: in Git Bash `python` is an MSYS build without deps; use the venv python.

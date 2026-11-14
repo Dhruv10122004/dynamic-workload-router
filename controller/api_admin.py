@@ -1,6 +1,7 @@
 """UI/admin endpoints (plan §8.2). M1 subset: health, catalog, workers."""
 from __future__ import annotations
 
+import psutil
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
@@ -22,7 +23,12 @@ async def health(request: Request):
     workers = service.db.all("SELECT worker_id FROM workers")
     fresh = [w["worker_id"] for w in workers if service.is_fresh(w["worker_id"])]
     reasons = [] if fresh else ["no fresh worker"]
-    return {"status": "READY" if fresh else "DEGRADED", "reasons": reasons, "fresh_workers": fresh}
+    try:
+        affinity = psutil.Process().cpu_affinity()
+    except (psutil.Error, AttributeError):
+        affinity = None
+    return {"status": "READY" if fresh else "DEGRADED", "reasons": reasons, "fresh_workers": fresh,
+            "controller_cpus": affinity}
 
 
 @router.get("/catalog")

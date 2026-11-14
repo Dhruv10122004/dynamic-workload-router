@@ -83,3 +83,43 @@ job sets an event that triggers an immediate heartbeat. Journal adds `accepted_a
 (FIFO order) and `reported_at` (24 h prune) columns.
 Alternatives rejected: asyncio agent (subprocess + psutil calls are blocking anyway).
 Plan §: 5.2, 5.3.
+
+### D-010 (2026-11-14, M2) data_digest inputs are a pure function of their size
+Context: §11 asks for "deterministic payload generation (seeded)"; every strategy must
+see identical inputs, and the catalog has no seed parameter.
+Decision: input = SHAKE-256(`dwr-blob-v1`) truncated to `input_bytes`, generated once per
+size (off the event loop), stored as `var/controller/blobs/<size>.bin` + `.sha256`, reused.
+The job row stores `input_sha256`; the worker verifies size and hash after download.
+Consequence: one cached file per distinct size, with no pruning yet; M6 traces should
+use a small set of sizes.
+Alternatives rejected: per-job random blobs (non-reproducible, unbounded disk); a seed
+parameter (catalog change for no measurement benefit). Plan §: 3 inv. 6, 4, 11.
+
+### D-011 (2026-11-14, M2) Edge downloads its input over localhost HTTP too
+Context: invariant 6 says "Edge reads it locally; Fog downloads it"; AC-2.3 says "On
+Edge, the transfer happens over localhost".
+Decision: both tiers use the same path: GET `/api/v1/jobs/{id}/input`. For Edge,
+DWR_CONTROLLER_URL is 127.0.0.1, so "local" means loopback, and transfer_s is measured
+the same way on both tiers. The download runs on its own thread while holding the slot;
+transfer_s = request start to last byte (monotonic). Failures → FAILED(input_transfer_error).
+Alternatives rejected: Edge reading the blob file directly (two code paths; Edge
+transfer_s would not be comparable). Plan §: 3, 5.3 step 2, AC-2.3.
+
+### D-012 (2026-11-14, M2) Controller pinning and start.ps1 -Sim
+Context: M2 says "controller pinned away from the Edge slot cores" and start.ps1 has a
+`-Sim` mode, neither further specified.
+Decision: the controller pins itself to `DWR_CONTROLLER_CPUS`, defaulting to every core
+not in `DWR_SLOT_CPUS` (start.ps1 also excludes the sim cores). `-Sim` starts a second
+agent `fog-sim` (tier fog) on this laptop with a per-session token, on
+`DWR_SIM_SLOT_CPUS` (default: the two highest free cores), so Edge→Fog can be run
+without the Linux laptop. Sim results are never evidence for Fog ACs.
+Alternatives rejected: -Sim as a dry run that starts nothing. Plan §: 2, M2.
+
+### D-013 (2026-11-14, M2) Background processes log to files themselves
+Context: `Start-Process -Redirect*` creates children with handle inheritance, so the
+Python processes held the caller's stdout pipe and `start.ps1 | Out-Null` never
+returned (reproduced on the Windows laptop).
+Decision: start.ps1 launches without redirection (no handle inheritance) and passes
+`--log-file var\logs\<name>.log`; controller and agent point stdout/stderr at that file.
+httpx request logging is set to WARNING in the agent (one line per heartbeat otherwise).
+Plan §: 2 (Install), 13 M2.

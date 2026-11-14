@@ -82,6 +82,11 @@ def validate_assignment(a: "Assignment") -> ValidatedJob:
         errors.append({"loc": ("max_runtime_s",), "msg": f"must be in (0, {v.max_runtime_s}]"})
     if a.timeout_s is not None and a.timeout_s > a.max_runtime_s:
         errors.append({"loc": ("timeout_s",), "msg": "exceeds max_runtime_s"})
+    expected_input = v.params.get("input_bytes", 0)
+    if a.input_bytes != expected_input:
+        errors.append({"loc": ("input_bytes",), "msg": f"params say {expected_input}, assignment says {a.input_bytes}"})
+    elif expected_input and not (a.input_url and a.input_sha256):
+        errors.append({"loc": ("input_url",), "msg": "input_url and input_sha256 are required for an input"})
     if errors:
         raise JobValidationError(errors)
     return v

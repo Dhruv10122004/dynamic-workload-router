@@ -13,6 +13,8 @@ import time
 import traceback
 from pathlib import Path
 
+import psutil
+
 from shared.schemas import JobValidationError, validate_job
 from worker.workloads import IMPLEMENTED
 from worker.workloads.common import (
@@ -47,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         result["cpu_s"] = time.process_time() - cpu0
         result["peak_rss_mb"] = peak_rss_mb()
         result["pid"] = os.getpid()
+        result["cpus_affinity"] = psutil.Process().cpu_affinity()  # proof of pinning
         write_result(args.job_dir, result)
         return EXIT_OK
     except Cancelled:

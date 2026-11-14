@@ -40,12 +40,15 @@ class JobContext:
             raise Cancelled()
 
     def sleep(self, seconds: float) -> None:
-        """Sleep in steps of <= 100 ms, checking the cancel sentinel between steps."""
-        end = time.monotonic() + seconds
+        """Sleep in steps of <= 100 ms, checking the cancel sentinel between steps.
+
+        The deadline uses perf_counter (the clock exec_s is measured with): on Windows
+        time.monotonic ticks every ~15.6 ms, which could end the hold early."""
+        end = time.perf_counter() + seconds
         while True:
             self._next_check = 0.0
             self.check_cancel()
-            left = end - time.monotonic()
+            left = end - time.perf_counter()
             if left <= 0:
                 return
             time.sleep(min(0.1, left))

@@ -70,7 +70,8 @@ def test_apply_reply_journals_assignments_once(agent):
 
 def test_worker_side_validation_bypassing_controller(agent):
     agent.apply_reply(_reply(assignments=[_assign("bad", params={"iterations": 5}),
-                                          _assign("nope", type="mem_touch", params={"mem_mb": 16, "hold_s": 0})]))
+                                          _assign("nope", type="data_digest", mem_mb=41, input_bytes=1024,
+                                                  params={"input_bytes": 1024, "rounds": 1})]))  # no input_url
     for j in ("bad", "nope"):
         row = agent.journal.get(j)
         assert (row["state"], row["fail_reason"]) == ("FAILED", "worker_validation")

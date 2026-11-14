@@ -8,6 +8,7 @@ a supervisor thread spawns and reaps jobs. They share the journal.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import platform
 import signal
@@ -28,14 +29,17 @@ from shared.schemas import (
     SCHEMA_VERSION, Assignment, HeartbeatReply, JobValidationError, RegisterReply, validate_assignment,
 )
 from worker.journal import Journal, row_to_snapshot
-from worker.supervisor import Supervisor
+from worker.supervisor import Supervisor, TransferCancelled
 from worker.telemetry import TelemetrySampler
 from worker.workloads import IMPLEMENTED
 
 log = logging.getLogger("dwr.agent")
 
-AGENT_VERSION = "1.0.0-m1"
+AGENT_VERSION = "1.0.0-m2"
 REQUEST_TIMEOUT_S = 3.0
+# Input download: connect quickly, tolerate slow Wi-Fi between chunks.
+DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+DOWNLOAD_CHUNK = 1024 * 1024
 REGISTER_RETRY_S = 2.0
 PRUNE_EVERY_S = 600.0
 
@@ -120,11 +124,17 @@ class Agent:
         self.seq = 0
         self.wake = threading.Event()
         self.journal = Journal(cfg.data_dir / "journal.db")
-        self.supervisor = Supervisor(self.journal, cfg.slot_cpus, cfg.data_dir / "jobs", on_terminal=self.wake.set)
+        self.supervisor = Supervisor(self.journal, cfg.slot_cpus, cfg.data_dir / "jobs",
+                                     on_terminal=self.wake.set, fetch_input=self.fetch_input)
         self.telemetry = TelemetrySampler()
         self.client = client or httpx.Client(
             base_url=f"{cfg.controller_url}/api/v1", timeout=REQUEST_TIMEOUT_S,
             headers={"Authorization": f"Bearer {cfg.token}"},
+        )
+        # Separate client: downloads run on supervisor threads, heartbeats on the main thread.
+        self.download_client = httpx.Client(
+            timeout=DOWNLOAD_TIMEOUT,
+            headers={"Authorization": f"Bearer {cfg.token}", "Accept-Encoding": "identity"},
         )
         self.registered = False
         self.drain = False
@@ -161,6 +171,30 @@ class Agent:
         self.heartbeat_interval_s = reply.heartbeat_interval_s
         self.registered = True
         log.info("registered as %s (instance %s)", self.cfg.worker_id, self.instance_id)
+
+    # ------------------------------------------------------------ input download
+    def fetch_input(self, job_id: str, spec: dict, dest: Path, cancel: threading.Event) -> tuple[int, float]:
+        """Stream the job's input from the controller to dest; verify size and sha256.
+        transfer_s is measured on the monotonic clock from request to last byte."""
+        url = f"{self.cfg.controller_url}{spec['input_url']}"
+        h, n = hashlib.sha256(), 0
+        t0 = time.perf_counter()
+        with self.download_client.stream("GET", url) as r:
+            if r.status_code != 200:
+                raise RuntimeError(f"GET {spec['input_url']} -> HTTP {r.status_code}")
+            with open(dest, "wb") as f:
+                for chunk in r.iter_raw(DOWNLOAD_CHUNK):
+                    if cancel.is_set():
+                        raise TransferCancelled()
+                    f.write(chunk)
+                    h.update(chunk)
+                    n += len(chunk)
+        transfer_s = time.perf_counter() - t0
+        if n != spec["input_bytes"]:
+            raise RuntimeError(f"received {n} bytes, expected {spec['input_bytes']}")
+        if h.hexdigest() != spec["input_sha256"]:
+            raise RuntimeError("input sha256 mismatch")
+        return n, transfer_s
 
     # ------------------------------------------------------------ heartbeat
     def build_heartbeat(self) -> dict:
@@ -255,14 +289,20 @@ class Agent:
             stop.set()
             sup.join(timeout=5)
             self.client.close()
+            self.download_client.close()
             self.journal.close()
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="worker.agent")
     ap.add_argument("--env-file", default=None, help='default: .env if present; "-" = environment only')
+    ap.add_argument("--log-file", default=None,
+                    help="append stdout/stderr here (start.ps1 uses it so no console handles are inherited)")
     args = ap.parse_args(argv)
+    if args.log_file:
+        sys.stdout = sys.stderr = open(args.log_file, "a", buffering=1, encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # otherwise one line per heartbeat
     env_file = args.env_file if args.env_file is not None else (".env" if Path(".env").is_file() else "-")
     try:
         cfg = AgentConfig.from_env(load_env(env_file))

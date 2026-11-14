@@ -1,7 +1,10 @@
-"""Supervisor (plan §5.4): slots pinned to cores, spawn, wait, classify the exit.
+"""Supervisor (plan §5.4): slots pinned to cores, input download, spawn, wait, classify.
 
-M1 scope: spawn/reap/classify and cancel of not-yet-spawned jobs. Timers, the RSS
-watchdog and verified termination of running jobs arrive in M4.
+Scope so far (M2): download/spawn/reap/classify and cancel of not-yet-spawned jobs.
+Timers, the RSS watchdog and verified termination of running jobs arrive in M4.
+
+A slot is held from the moment a job leaves ACCEPTED: first by its input download
+(on its own thread, so a slow transfer never blocks the tick), then by its process.
 
 A job is a process *tree*: on Windows the venv python.exe is a launcher whose child
 is the real interpreter (DECISIONS D-006). The journal records the root PID.
@@ -28,26 +31,52 @@ log = logging.getLogger("dwr.supervisor")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ERROR_TAIL_CHARS = 2000
 
+# fetch_input(job_id, spec, dest_path, cancel_event) -> (transfer_bytes, transfer_s); raises on failure.
+FetchInput = Callable[[str, dict, Path, threading.Event], "tuple[int, float]"]
+
+
+class TransferCancelled(Exception):
+    pass
+
 
 @dataclass
 class _Running:
     job_id: str
     slot: int
     popen: subprocess.Popen
-    proc: psutil.Process
+    proc: psutil.Process | None
     job_dir: Path
     files: list[IO] = field(default_factory=list)
 
 
+@dataclass
+class _Download:
+    job_id: str
+    slot: int
+    row: object
+    job_dir: Path
+    cancel: threading.Event = field(default_factory=threading.Event)
+    done: threading.Event = field(default_factory=threading.Event)
+    transfer_bytes: int | None = None
+    transfer_s: float | None = None
+    error: str | None = None
+
+
+def _no_fetch(job_id: str, spec: dict, dest: Path, cancel: threading.Event) -> tuple[int, float]:
+    raise RuntimeError("this supervisor has no input fetcher")
+
+
 class Supervisor:
     def __init__(self, journal: Journal, slot_cpus: list[list[int]], jobs_dir: Path, *,
-                 on_terminal: Callable[[], None] | None = None, python: str = sys.executable):
+                 on_terminal: Callable[[], None] | None = None, fetch_input: FetchInput | None = None,
+                 python: str = sys.executable):
         self.journal = journal
         self.slot_cpus = slot_cpus
         self.jobs_dir = jobs_dir
         self.python = python
         self.on_terminal = on_terminal or (lambda: None)
-        self._running: dict[int, _Running] = {}
+        self.fetch_input = fetch_input or _no_fetch
+        self._slots: dict[int, _Running | _Download] = {}
         self._lock = threading.Lock()  # tick() vs request_cancel() from the heartbeat thread
 
     # ------------------------------------------------------------ queries
@@ -56,11 +85,11 @@ class Supervisor:
         return len(self.slot_cpus)
 
     def free_slots(self) -> int:
-        return self.slots_total - len(self._running)
+        return self.slots_total - len(self._slots)
 
     def job_processes(self) -> list[psutil.Process]:
         """Root process of every running job (for own-CPU telemetry)."""
-        return [r.proc for r in list(self._running.values()) if r.proc is not None]
+        return [r.proc for r in list(self._slots.values()) if isinstance(r, _Running) and r.proc is not None]
 
     # ------------------------------------------------------------ control
     def request_cancel(self, job_id: str) -> None:
@@ -70,12 +99,16 @@ class Supervisor:
                 if row is not None and row["state"] == JobState.RUNNING.value:
                     log.warning("cancel of running job %s requested; termination arrives in M4", job_id)
                 return
+            for s in self._slots.values():
+                if isinstance(s, _Download) and s.job_id == job_id:
+                    s.cancel.set()  # the slot is freed when the download thread returns
             self.journal.mark_terminal(job_id, JobState.CANCELLED)
         self.on_terminal()
 
     def tick(self) -> None:
         with self._lock:
             changed = self._reap()
+            changed |= self._finish_downloads()
             changed |= self._start_pending()
         if changed:
             self.on_terminal()
@@ -90,16 +123,60 @@ class Supervisor:
 
     # ------------------------------------------------------------ internals
     def _start_pending(self) -> bool:
-        """Spawn ACCEPTED jobs into free slots. Returns True if a job became terminal."""
+        """Move ACCEPTED jobs into free slots. Returns True if a job became terminal."""
         changed = False
+        busy = {s.job_id for s in self._slots.values()}
         for row in self.journal.accepted_fifo():
-            free = [s for s in range(self.slots_total) if s not in self._running]
+            if row["job_id"] in busy:
+                continue  # still downloading
+            free = [s for s in range(self.slots_total) if s not in self._slots]
             if not free:
                 break
-            changed |= self._spawn(row, free[0])
+            spec = json.loads(row["spec_json"])
+            if spec.get("input_bytes"):
+                self._start_download(row, free[0])
+            else:
+                changed |= self._spawn(row, free[0])
         return changed
 
-    def _spawn(self, row, slot: int) -> bool:
+    def _start_download(self, row, slot: int) -> None:
+        job_id = row["job_id"]
+        d = _Download(job_id, slot, row, self.jobs_dir / job_id)
+        self._slots[slot] = d
+
+        def work() -> None:
+            try:
+                d.job_dir.mkdir(parents=True, exist_ok=True)
+                d.transfer_bytes, d.transfer_s = self.fetch_input(
+                    job_id, json.loads(row["spec_json"]), d.job_dir / "input.bin", d.cancel)
+            except TransferCancelled:
+                d.error = "cancelled"
+            except Exception as e:  # any failure is input_transfer_error
+                d.error = f"{type(e).__name__}: {e}"
+            finally:
+                d.done.set()
+
+        threading.Thread(target=work, name=f"download-{job_id[:8]}", daemon=True).start()
+        log.info("downloading input for %s (%s bytes) slot=%s", job_id, json.loads(row["spec_json"])["input_bytes"], slot)
+
+    def _finish_downloads(self) -> bool:
+        changed = False
+        for slot, d in list(self._slots.items()):
+            if not isinstance(d, _Download) or not d.done.is_set():
+                continue
+            del self._slots[slot]
+            if self.journal.get(d.job_id)["state"] != JobState.ACCEPTED.value:
+                continue  # cancelled while downloading
+            if d.error:
+                log.error("input download for %s failed: %s", d.job_id, d.error)
+                self.journal.mark_terminal(d.job_id, JobState.FAILED, fail_reason="input_transfer_error",
+                                           error=d.error, transfer_bytes=d.transfer_bytes, transfer_s=d.transfer_s)
+                changed = True
+            else:
+                changed |= self._spawn(d.row, slot, transfer_bytes=d.transfer_bytes, transfer_s=d.transfer_s)
+        return changed
+
+    def _spawn(self, row, slot: int, *, transfer_bytes: int | None = None, transfer_s: float | None = None) -> bool:
         job_id = row["job_id"]
         spec = json.loads(row["spec_json"])
         job_dir = self.jobs_dir / job_id
@@ -119,7 +196,8 @@ class Supervisor:
             for f in files:
                 f.close()
             log.error("spawn of %s failed: %s", job_id, e)
-            self.journal.mark_terminal(job_id, JobState.FAILED, fail_reason="spawn_error", error=str(e))
+            self.journal.mark_terminal(job_id, JobState.FAILED, fail_reason="spawn_error", error=str(e),
+                                       transfer_bytes=transfer_bytes, transfer_s=transfer_s)
             return True
         try:
             proc = psutil.Process(popen.pid)
@@ -128,20 +206,23 @@ class Supervisor:
             proc, create_time = None, None
         # Write-ahead step 2: record the PID immediately.
         self.journal.mark_running(job_id, slot=slot, pid=popen.pid, pid_create_time=create_time,
-                                  job_dir=str(job_dir), spawn_s=spawn_s)
-        self._running[slot] = _Running(job_id, slot, popen, proc, job_dir, files)
+                                  job_dir=str(job_dir), spawn_s=spawn_s, transfer_bytes=transfer_bytes,
+                                  transfer_s=transfer_s)
+        self._slots[slot] = _Running(job_id, slot, popen, proc, job_dir, files)
         log.info("spawned %s (%s) pid=%s slot=%s cpus=%s", job_id, spec["type"], popen.pid, slot, cpus)
         return False
 
     def _reap(self) -> bool:
         changed = False
-        for slot, r in list(self._running.items()):
+        for slot, r in list(self._slots.items()):
+            if not isinstance(r, _Running):
+                continue
             rc = r.popen.poll()
             if rc is None:
                 continue
             for f in r.files:
                 f.close()
-            del self._running[slot]
+            del self._slots[slot]
             state, fields = classify_exit(rc, r.job_dir)
             self.journal.mark_terminal(r.job_id, state, exit_code=rc, **fields)
             log.info("job %s exited rc=%s -> %s", r.job_id, rc, state.value)
@@ -168,7 +249,7 @@ def _stderr_tail(job_dir: Path) -> str:
 
 
 def classify_exit(rc: int, job_dir: Path) -> tuple[JobState, dict]:
-    """Plan §5.4 exit classification (M1 subset: no supervisor kills yet)."""
+    """Plan §5.4 exit classification (subset until M4: no supervisor kills yet)."""
     result = read_result(job_dir)
     if rc == 0 and result is not None:
         return JobState.SUCCEEDED, {"result": result}

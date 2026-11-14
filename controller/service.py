@@ -14,7 +14,10 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
+from controller.blobs import BlobStore
 from controller.db import Database, add_event, insert_job_event, transition_job
 from controller.settings import Settings
 from shared.schemas import (
@@ -70,6 +73,7 @@ class ControllerService:
         self.settings = settings
         self.db = db
         self.rt: dict[str, WorkerRuntime] = {}
+        self.blobs = BlobStore(settings.data_dir / "blobs")
         self._unknown_logged: set[tuple[str, str]] = set()
         self._kick: asyncio.Event | None = None
         self._task: asyncio.Task | None = None
@@ -228,7 +232,8 @@ class ControllerService:
         listed = {j.job_id for j in hb.jobs}
         assignments = [
             Assignment(job_id=r["job_id"], type=r["type"], params=json.loads(r["params_json"]),
-                       input_bytes=r["input_bytes"], input_sha256=r["input_sha256"], input_url=None,
+                       input_bytes=r["input_bytes"], input_sha256=r["input_sha256"],
+                       input_url=f"/api/v1/jobs/{r['job_id']}/input" if r["input_bytes"] else None,
                        max_runtime_s=r["max_runtime_s"], timeout_s=r["timeout_s"], mem_mb=r["mem_mb"])
             for r in self.db.all("SELECT * FROM jobs WHERE worker_id=? AND state='ASSIGNED'"
                                  " ORDER BY assign_ts, rowid", (worker_id,))
@@ -258,15 +263,20 @@ class ControllerService:
                             "msg": "placement=auto arrives with the scheduler in M3; name a worker_id"}])
         if self.db.one("SELECT 1 FROM workers WHERE worker_id=?", (sub.placement,)) is None:
             raise Invalid([{"loc": ["placement"], "msg": f"unknown worker {sub.placement!r}"}])
+        input_bytes = v.params.get("input_bytes", 0)
+        # Blob generation is CPU work: keep it off the event loop (invariant 4).
+        input_sha256 = await asyncio.to_thread(self.blobs.ensure, input_bytes) if input_bytes else None
         job_id = uuid.uuid4().hex
         now = time.time()
         async with self.db.lock:
             with self.db.tx() as c:
                 c.execute(
                     """INSERT INTO jobs (job_id, type, params_json, mem_mb, max_runtime_s, timeout_s, placement,
-                         state, submit_ts, run_id, trace_index) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                         state, submit_ts, run_id, trace_index, input_bytes, input_sha256)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (job_id, v.type, json.dumps(v.params), v.mem_mb, v.max_runtime_s, v.timeout_s,
-                     sub.placement, JobState.PENDING.value, now, sub.run_id, sub.trace_index),
+                     sub.placement, JobState.PENDING.value, now, sub.run_id, sub.trace_index,
+                     input_bytes, input_sha256),
                 )
                 insert_job_event(c, job_id, None, JobState.PENDING.value, "submit", None, now)
         self.kick()
@@ -283,6 +293,20 @@ class ControllerService:
         d = self.db.one("SELECT * FROM decisions WHERE job_id=? ORDER BY id DESC LIMIT 1", (job_id,))
         job["decision"] = None if d is None else decision_to_json(d)
         return job
+
+    def job_input(self, job_id: str, authorize: Callable[[str], None]) -> Path:
+        """Blob path for a job's input. `authorize(worker_id)` must raise unless the caller
+        is the assigned worker; it runs before anything about the job's state is revealed."""
+        row = self.db.one("SELECT worker_id, state, input_bytes FROM jobs WHERE job_id=?", (job_id,))
+        if row is None or not row["worker_id"] or not row["input_bytes"]:
+            raise NotFound(f"job {job_id!r} has no input for any worker")
+        authorize(row["worker_id"])
+        if row["state"] not in {s.value for s in COMMITTED}:
+            raise Conflict(f"job {job_id!r} is {row['state']}; its input is no longer served")
+        path = self.blobs.path(row["input_bytes"])
+        if not path.is_file():
+            raise NotFound(f"input blob for job {job_id!r} is missing on the controller")
+        return path
 
     def list_jobs(self, *, state: str | None, worker: str | None, run_id: str | None,
                   limit: int, after: str | None) -> list[dict]:
