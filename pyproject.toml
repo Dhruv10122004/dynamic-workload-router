@@ -1,0 +1,25 @@
+[project]
+name = "dynamic-workload-router"
+version = "1.0.0.dev0"
+description = "Edge + Fog workload router (V1)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi==0.115.12",
+    "starlette==0.46.2",
+    "uvicorn==0.34.2",
+    "pydantic==2.13.3",
+    "httpx==0.28.1",
+    "psutil==7.2.2",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1", "requests==2.32.3"]
+
+[tool.pytest.ini_options]
+# tests/ = V1; app/Tests = legacy mid-term tests (file pattern tests_*.py).
+testpaths = ["tests", "app/Tests"]
+python_files = ["test_*.py", "tests_*.py"]
+addopts = "-ra"
+markers = [
+    "integration: starts real controller/agent processes on this machine",
+]
