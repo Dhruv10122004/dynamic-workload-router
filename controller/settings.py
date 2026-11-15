@@ -35,6 +35,9 @@ class Settings:
     host_busy_high: float = 70.0
     host_busy_low: float = 50.0
     aging_s: float = 30.0
+    queue_timeout_s: float = 300.0      # plan §6.5; per experiment via PUT /scheduler
+    lost_timeout_s: float = 300.0       # plan §6.5 LOST_TIMEOUT_S
+    maintenance_interval_s: float = 1.0
     telemetry_sample_s: float = 5.0
 
     @property
@@ -90,6 +93,8 @@ class Settings:
         if not 0 <= hb_low < hb_high <= 100:
             errors.append(f"need 0 <= DWR_HOST_BUSY_LOW < DWR_HOST_BUSY_HIGH <= 100, got {hb_low}, {hb_high}")
         aging_s = number("DWR_AGING_S", 30.0)
+        queue_timeout_s = number("DWR_QUEUE_TIMEOUT_S", 300.0)
+        lost_timeout_s = number("DWR_LOST_TIMEOUT_S", 300.0)
         if errors:
             raise SettingsError("invalid controller configuration:\n  - " + "\n  - ".join(errors))
         return cls(
@@ -106,6 +111,8 @@ class Settings:
             host_busy_high=hb_high,
             host_busy_low=hb_low,
             aging_s=aging_s,
+            queue_timeout_s=queue_timeout_s,
+            lost_timeout_s=lost_timeout_s,
         )
 
 

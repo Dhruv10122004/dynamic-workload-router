@@ -61,7 +61,11 @@ def main(argv: list[str] | None = None) -> int:
         pending = set(ids)
         while pending and time.monotonic() - t0 < a.timeout:
             time.sleep(2)
-            pending = {j for j in pending if c.get(f"/jobs/{j}").json()["state"] not in TERMINAL}
+            try:
+                pending = {j for j in pending if c.get(f"/jobs/{j}").json()["state"] not in TERMINAL}
+            except httpx.TransportError as e:  # controller restarting (AC-4.7): keep waiting
+                print(f"  t={time.monotonic() - t0:5.0f}s controller unreachable ({type(e).__name__})", flush=True)
+                continue
             print(f"  t={time.monotonic() - t0:5.0f}s not finished: {len(pending)}", flush=True)
         jobs = [c.get(f"/jobs/{j}").json() for j in ids]
 

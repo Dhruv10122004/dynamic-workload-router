@@ -121,7 +121,7 @@ def test_burst_of_100_never_overbooks(client, tmp_path):
     edge = Worker(client, "edge-1", "edge", slots=2, budget=1536)
     fog = Worker(client, "fog-1", "fog", slots=2, budget=1536)
     edge.beat(), fog.beat()
-    # Mixed sizes so the memory budget binds as well as the slots (740 MB x2 = 1480 <= 1536).
+    # Mixed sizes so the memory budget binds as well as the slots (748 MB x2 = 1496 <= 1536).
     sizes = [None, 700, 300, None, 700] * 20
     with ThreadPoolExecutor(16) as pool:
         ids = list(pool.map(lambda m: submit(client, m), sizes))
@@ -220,9 +220,9 @@ def test_aged_job_is_not_starved_by_later_small_jobs(client):
     assert client.put("/api/v1/scheduler", json={"aging_s": 0.3}, headers=ADMIN).status_code == 200
     edge = Worker(client, "edge-1", "edge", slots=3, budget=1064)
     edge.beat()
-    small = submit(client)                                  # 40 MB, keeps running
+    small = submit(client)                                  # 48 MB, keeps running
     settle(client, [edge], lambda: job(client, small)["state"] == "ASSIGNED")
-    big = submit(client, mem=1000)                          # 1040 MB: 40 + 1040 > 1064 -> waits
+    big = submit(client, mem=1000)                          # 1048 MB: 48 + 1048 > 1064 -> waits
     time.sleep(0.5)                                         # big is now older than aging_s
     later = submit(client)                                  # would fit, but Edge is held for `big`
     time.sleep(0.3)
@@ -232,4 +232,4 @@ def test_aged_job_is_not_starved_by_later_small_jobs(client):
     assert job(client, later)["state"] == "PENDING"
     edge.finish(small)
     settle(client, [edge], lambda: job(client, big)["state"] == "ASSIGNED")
-    assert job(client, later)["state"] == "PENDING"         # 1040 + 40 > 1064 until big ends
+    assert job(client, later)["state"] == "PENDING"         # 1048 + 48 > 1064 until big ends

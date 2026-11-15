@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass
 
 MIB = 1024 * 1024
-BASE_MEM_MB = 40  # interpreter + workload overhead, declared for every type
+BASE_MEM_MB = 48  # interpreter + workload overhead (whole process tree), declared for every type (D-019)
 
 
 @dataclass(frozen=True)

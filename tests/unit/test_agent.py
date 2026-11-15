@@ -54,7 +54,7 @@ def agent(tmp_path):
 
 def _assign(job_id, **kw):
     return {"job_id": job_id, "type": "cpu_hash", "params": {"iterations": 20_000}, "max_runtime_s": 120,
-            "mem_mb": 40, **kw}
+            "mem_mb": 48, **kw}
 
 
 def _reply(**kw):

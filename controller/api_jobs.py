@@ -1,4 +1,4 @@
-"""Job endpoints (plan §8.2): submit, list, get. Cancel arrives in M4."""
+"""Job endpoints (plan §8.2): submit, list, get, cancel."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -23,3 +23,9 @@ async def list_jobs(request: Request, state: str | None = None, worker: str | No
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, request: Request):
     return request.app.state.service.get_job(job_id)
+
+
+@router.post("/jobs/{job_id}/cancel", status_code=202)
+async def cancel_job(job_id: str, request: Request):
+    """202 means *requested*: a running job ends as KILLED(cancel) once the worker verifies it."""
+    return await request.app.state.service.cancel(job_id)

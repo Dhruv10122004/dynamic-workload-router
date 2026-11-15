@@ -13,8 +13,10 @@ def journal(tmp_path):
     j.close()
 
 
-def _spec(job_id, iterations):
-    return {"job_id": job_id, "type": "cpu_hash", "params": {"iterations": iterations}}
+def _spec(job_id, iterations, **kw):
+    """Shaped like a real Assignment (limits included)."""
+    return {"job_id": job_id, "type": "cpu_hash", "params": {"iterations": iterations},
+            "mem_mb": 48, "max_runtime_s": 120.0, "timeout_s": None, **kw}
 
 
 def _run_until(sup, journal, job_ids, timeout=30.0):

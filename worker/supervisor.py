@@ -1,10 +1,13 @@
-"""Supervisor (plan §5.4): slots pinned to cores, input download, spawn, wait, classify.
-
-Scope so far (M2): download/spawn/reap/classify and cancel of not-yet-spawned jobs.
-Timers, the RSS watchdog and verified termination of running jobs arrive in M4.
+"""Supervisor (plan §5.4): slots pinned to cores, input download, spawn, wait, classify,
+timers, RSS watchdog and verified termination.
 
 A slot is held from the moment a job leaves ACCEPTED: first by its input download
-(on its own thread, so a slow transfer never blocks the tick), then by its process.
+(on its own thread, so a slow transfer never blocks the tick), then by its process,
+and, if a termination could not be verified, by the `stuck` processes until they are gone.
+
+Termination (cancel, timeout, max_runtime, memory_limit) is a non-blocking state machine
+advanced by tick(): cancel sentinel -> 2 s grace -> kill the tree -> poll up to 5 s for
+the same pid + create_time to be gone -> record termination_verified and kill_latency_ms.
 
 A job is a process *tree*: on Windows the venv python.exe is a launcher whose child
 is the real interpreter (DECISIONS D-006). The journal records the root PID.
@@ -24,12 +27,17 @@ from typing import IO, Callable
 import psutil
 
 from shared.states import JobState
+from worker import proctree
 from worker.journal import Journal
 
 log = logging.getLogger("dwr.supervisor")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ERROR_TAIL_CHARS = 2000
+TERM_GRACE_S = 2.0          # cancel sentinel first; the workload exits with code 3 if it can
+VERIFY_TIMEOUT_S = 5.0      # after the kill
+WATCHDOG_INTERVAL_S = 0.25
+RSS_LIMIT_FACTOR = 1.10     # kill when the tree's RSS exceeds 110% of the declared memory
 
 # fetch_input(job_id, spec, dest_path, cancel_event) -> (transfer_bytes, transfer_s); raises on failure.
 FetchInput = Callable[[str, dict, Path, threading.Event], "tuple[int, float]"]
@@ -46,7 +54,25 @@ class _Running:
     popen: subprocess.Popen
     proc: psutil.Process | None
     job_dir: Path
+    spec: dict
+    started: float                                   # time.monotonic() at spawn (plan §5.4 timers)
     files: list[IO] = field(default_factory=list)
+    next_rss_check: float = 0.0
+    peak_rss_mb: float = 0.0
+    # termination in progress
+    kill_reason: str | None = None
+    kill_t0: float | None = None                     # perf_counter when termination began
+    kill_sent: float | None = None                   # perf_counter when the tree was killed
+    tree: list[psutil.Process] = field(default_factory=list)
+    note: str | None = None
+
+
+@dataclass
+class _Stuck:
+    """A slot whose job could not be verified gone: not reused until the processes vanish."""
+    job_id: str
+    slot: int
+    procs: list[psutil.Process]
 
 
 @dataclass
@@ -72,11 +98,11 @@ class Supervisor:
                  python: str = sys.executable):
         self.journal = journal
         self.slot_cpus = slot_cpus
-        self.jobs_dir = jobs_dir
+        self.jobs_dir = jobs_dir.resolve()  # absolute: children run with cwd=REPO_ROOT
         self.python = python
         self.on_terminal = on_terminal or (lambda: None)
         self.fetch_input = fetch_input or _no_fetch
-        self._slots: dict[int, _Running | _Download] = {}
+        self._slots: dict[int, _Running | _Download | _Stuck] = {}
         self._lock = threading.Lock()  # tick() vs request_cancel() from the heartbeat thread
 
     # ------------------------------------------------------------ queries
@@ -87,17 +113,25 @@ class Supervisor:
     def free_slots(self) -> int:
         return self.slots_total - len(self._slots)
 
+    def stuck_slots(self) -> list[int]:
+        return sorted(s for s, v in self._slots.items() if isinstance(v, _Stuck))
+
     def job_processes(self) -> list[psutil.Process]:
         """Root process of every running job (for own-CPU telemetry)."""
         return [r.proc for r in list(self._slots.values()) if isinstance(r, _Running) and r.proc is not None]
 
     # ------------------------------------------------------------ control
     def request_cancel(self, job_id: str) -> None:
+        """Cancel an ACCEPTED job (never spawned -> CANCELLED) or start terminating a RUNNING
+        one (-> KILLED(cancel) once verified). Idempotent: replies repeat cancels every beat."""
         with self._lock:
             row = self.journal.get(job_id)
+            if row is not None and row["state"] == JobState.RUNNING.value:
+                for r in self._slots.values():
+                    if isinstance(r, _Running) and r.job_id == job_id:
+                        self._begin_termination(r, "cancel")
+                return
             if row is None or row["state"] != JobState.ACCEPTED.value:
-                if row is not None and row["state"] == JobState.RUNNING.value:
-                    log.warning("cancel of running job %s requested; termination arrives in M4", job_id)
                 return
             for s in self._slots.values():
                 if isinstance(s, _Download) and s.job_id == job_id:
@@ -108,6 +142,7 @@ class Supervisor:
     def tick(self) -> None:
         with self._lock:
             changed = self._reap()
+            self._release_stuck()
             changed |= self._finish_downloads()
             changed |= self._start_pending()
         if changed:
@@ -208,26 +243,123 @@ class Supervisor:
         self.journal.mark_running(job_id, slot=slot, pid=popen.pid, pid_create_time=create_time,
                                   job_dir=str(job_dir), spawn_s=spawn_s, transfer_bytes=transfer_bytes,
                                   transfer_s=transfer_s)
-        self._slots[slot] = _Running(job_id, slot, popen, proc, job_dir, files)
+        self._slots[slot] = _Running(job_id, slot, popen, proc, job_dir, spec, time.monotonic(), files)
         log.info("spawned %s (%s) pid=%s slot=%s cpus=%s", job_id, spec["type"], popen.pid, slot, cpus)
         return False
 
     def _reap(self) -> bool:
+        """Advance every running job: normal exit, limits, termination. True if any became terminal."""
         changed = False
         for slot, r in list(self._slots.items()):
             if not isinstance(r, _Running):
                 continue
             rc = r.popen.poll()
-            if rc is None:
-                continue
-            for f in r.files:
-                f.close()
-            del self._slots[slot]
-            state, fields = classify_exit(rc, r.job_dir)
-            self.journal.mark_terminal(r.job_id, state, exit_code=rc, **fields)
-            log.info("job %s exited rc=%s -> %s", r.job_id, rc, state.value)
-            changed = True
+            if r.kill_reason is None:
+                if rc is not None:
+                    self._close(r)
+                    del self._slots[slot]
+                    state, fields = classify_exit(rc, r.job_dir)
+                    self.journal.mark_terminal(r.job_id, state, exit_code=rc, **fields)
+                    log.info("job %s exited rc=%s -> %s", r.job_id, rc, state.value)
+                    changed = True
+                    continue
+                self._check_limits(r)
+            if r.kill_reason is not None:
+                changed |= self._advance_termination(r, rc)
         return changed
+
+    def _check_limits(self, r: _Running) -> None:
+        """Plan §5.4: timeout_s and max_runtime_s from spawn (monotonic), RSS every 250 ms."""
+        elapsed = time.monotonic() - r.started
+        timeout_s = r.spec.get("timeout_s")
+        if timeout_s is not None and elapsed > timeout_s:
+            self._begin_termination(r, "timeout", f"ran {elapsed:.2f} s > timeout_s {timeout_s}")
+            return
+        if elapsed > r.spec["max_runtime_s"]:
+            self._begin_termination(r, "max_runtime", f"ran {elapsed:.2f} s > max_runtime_s {r.spec['max_runtime_s']}")
+            return
+        now = time.monotonic()
+        if r.proc is None or now < r.next_rss_check:
+            return
+        r.next_rss_check = now + WATCHDOG_INTERVAL_S
+        rss = 0
+        for p in proctree.tree(r.proc):
+            try:
+                rss += p.memory_info().rss
+            except psutil.Error:
+                pass
+        rss_mb = rss / (1024 * 1024)
+        r.peak_rss_mb = max(r.peak_rss_mb, rss_mb)
+        limit = RSS_LIMIT_FACTOR * r.spec["mem_mb"]
+        if rss_mb > limit:
+            self._begin_termination(r, "memory_limit", f"tree RSS {rss_mb:.0f} MB > {limit:.0f} MB "
+                                                       f"(110% of declared {r.spec['mem_mb']} MB)")
+
+    def _begin_termination(self, r: _Running, reason: str, note: str | None = None) -> None:
+        if r.kill_reason is not None:
+            return  # already terminating (a repeated cancel, or a second limit)
+        r.kill_reason, r.note, r.kill_t0 = reason, note, time.perf_counter()
+        r.tree = proctree.tree(r.proc) if r.proc is not None else []
+        try:
+            (r.job_dir / "cancel").touch()
+        except OSError as e:
+            log.warning("could not write cancel sentinel for %s: %s", r.job_id, e)
+        log.info("terminating %s: %s%s", r.job_id, reason, f" ({note})" if note else "")
+
+    def _advance_termination(self, r: _Running, rc: int | None) -> bool:
+        now = time.perf_counter()
+        if r.kill_sent is None:
+            if rc is not None and not any(proctree.alive(p) for p in r.tree):
+                return self._finish_termination(r, rc, verified=True)  # exited during the grace
+            if now - r.kill_t0 < TERM_GRACE_S:
+                return False
+            if r.proc is not None:  # pick up children spawned since the sentinel
+                r.tree = list({p.pid: p for p in [*r.tree, *proctree.tree(r.proc)]}.values())
+            proctree.kill(r.tree)
+            r.kill_sent = now
+            return False
+        rc = r.popen.poll()
+        if rc is not None and not any(proctree.alive(p) for p in r.tree):
+            return self._finish_termination(r, rc, verified=True)
+        if now - r.kill_sent > VERIFY_TIMEOUT_S:
+            return self._finish_termination(r, rc, verified=False)
+        return False
+
+    def _finish_termination(self, r: _Running, rc: int | None, *, verified: bool) -> bool:
+        latency_ms = (time.perf_counter() - r.kill_t0) * 1000
+        self._close(r)
+        result = read_result(r.job_dir)
+        if rc == 0 and result is not None:
+            # It finished on its own just as the termination began: report the real outcome.
+            self.journal.mark_terminal(r.job_id, JobState.SUCCEEDED, exit_code=rc, result=result)
+            log.info("job %s finished before its termination (%s) took effect", r.job_id, r.kill_reason)
+        else:
+            error = r.note or (f"{r.kill_reason} requested")
+            if not verified:
+                error += "; termination NOT verified, slot marked stuck"
+            self.journal.mark_terminal(r.job_id, JobState.KILLED, kill_reason=r.kill_reason, exit_code=rc,
+                                       termination_verified=int(verified), kill_latency_ms=latency_ms,
+                                       error=error, result=result)
+            log.info("job %s KILLED(%s) verified=%s latency=%.0f ms", r.job_id, r.kill_reason, verified, latency_ms)
+        if verified:
+            del self._slots[r.slot]
+        else:
+            survivors = [p for p in r.tree if proctree.alive(p)]
+            log.error("slot %s is stuck: job %s processes %s did not exit", r.slot, r.job_id,
+                      [p.pid for p in survivors])
+            self._slots[r.slot] = _Stuck(r.job_id, r.slot, survivors)
+        return True
+
+    def _release_stuck(self) -> None:
+        for slot, s in list(self._slots.items()):
+            if isinstance(s, _Stuck) and not any(proctree.alive(p) for p in s.procs):
+                log.warning("stuck slot %s released: job %s processes are gone", slot, s.job_id)
+                del self._slots[slot]
+
+    @staticmethod
+    def _close(r: _Running) -> None:
+        for f in r.files:
+            f.close()
 
 
 def read_result(job_dir: Path) -> dict | None:
@@ -249,7 +381,8 @@ def _stderr_tail(job_dir: Path) -> str:
 
 
 def classify_exit(rc: int, job_dir: Path) -> tuple[JobState, dict]:
-    """Plan §5.4 exit classification (subset until M4: no supervisor kills yet)."""
+    """Plan §5.4 exit classification for an exit the supervisor did not cause (its own
+    kills are classified in _finish_termination)."""
     result = read_result(job_dir)
     if rc == 0 and result is not None:
         return JobState.SUCCEEDED, {"result": result}

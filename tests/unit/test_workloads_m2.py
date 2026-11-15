@@ -81,7 +81,8 @@ def test_blob_store_is_deterministic_and_cached(tmp_path):
 
 def _dd_spec(job_id, size=1024):
     return {"job_id": job_id, "type": "data_digest", "params": {"input_bytes": size, "rounds": 1},
-            "input_bytes": size, "input_url": f"/api/v1/jobs/{job_id}/input", "input_sha256": "x"}
+            "input_bytes": size, "input_url": f"/api/v1/jobs/{job_id}/input", "input_sha256": "x",
+            "mem_mb": 49, "max_runtime_s": 120.0, "timeout_s": None}
 
 
 def _tick_until(sup, journal, job_id, timeout=30):

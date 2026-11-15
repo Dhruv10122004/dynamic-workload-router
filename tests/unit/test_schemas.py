@@ -1,6 +1,6 @@
 import pytest
 
-from shared.catalog import CATALOG, MIB
+from shared.catalog import BASE_MEM_MB, CATALOG, MIB
 from shared.envfile import load_env
 from shared.schemas import Assignment, JobValidationError, validate_assignment, validate_job
 
@@ -8,7 +8,7 @@ from shared.schemas import Assignment, JobValidationError, validate_assignment, 
 def test_cpu_hash_defaults_and_declared_memory():
     v = validate_job("cpu_hash", {})
     assert v.params == {"iterations": 1_000_000}
-    assert v.mem_mb == 40 and v.max_runtime_s == 120 and v.timeout_s is None
+    assert v.mem_mb == BASE_MEM_MB and v.max_runtime_s == 120 and v.timeout_s is None
 
 
 @pytest.mark.parametrize("params", [
@@ -34,9 +34,9 @@ def test_timeout_must_not_exceed_max_runtime():
 
 def test_data_digest_and_mem_touch_declared_memory_and_runtime():
     v = validate_job("data_digest", {"input_bytes": 10 * MIB + 1, "rounds": 2})
-    assert v.mem_mb == 40 + 11
+    assert v.mem_mb == BASE_MEM_MB + 11
     m = validate_job("mem_touch", {"mem_mb": 256, "hold_s": 10})
-    assert m.mem_mb == 296 and m.max_runtime_s == 70.0
+    assert m.mem_mb == BASE_MEM_MB + 256 and m.max_runtime_s == 70.0
     assert validate_job("mem_touch", {"mem_mb": 16, "hold_s": 2.5}).params["hold_s"] == 2.5
 
 
@@ -52,7 +52,7 @@ def test_catalog_json_lists_all_types():
 
 
 def _assignment(**kw):
-    base = dict(job_id="j1", type="cpu_hash", params={"iterations": 20_000}, max_runtime_s=120, mem_mb=40)
+    base = dict(job_id="j1", type="cpu_hash", params={"iterations": 20_000}, max_runtime_s=120, mem_mb=BASE_MEM_MB)
     return Assignment(**{**base, **kw})
 
 

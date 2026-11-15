@@ -16,7 +16,14 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
   `add_event(c, kind, ...)`.
 - `service.ControllerService`: `register`, `heartbeat`, `submit`, `get_job`, `list_jobs`,
   `list_workers`, `get_worker`, `schedule_pass`, `is_fresh`, `get_scheduler`,
-  `put_scheduler`, `list_events`, `sample_telemetry`. Raises `NotFound/Conflict/Invalid`.
+  `put_scheduler`, `list_events`, `sample_telemetry`, `maintenance`, `cancel`,
+  `set_draining`. Raises `NotFound/Conflict/Invalid`.
+- Reliability (plan §6.5, §6.6; D-021): `maintenance()` runs every 1 s. Stale workers get a
+  `worker_stale` event and their committed jobs go to UNKNOWN. UNKNOWN longer than
+  `DWR_LOST_TIMEOUT_S` → FAILED(lost); PENDING longer than `queue_timeout_s` →
+  FAILED(queue_timeout). Each applied snapshot reconciles the worker's UNKNOWN jobs: a listed
+  job takes its reported state; a missing one goes back to ASSIGNED if never acked, or to
+  FAILED(lost) if acked.
 - Scheduling (plan §6.3, §6.4): `schedule_pass` builds `scheduler.WorkerView`s from SQLite
   plus heartbeat state, then calls the active policy. It runs on submit, on a terminal
   snapshot, when a worker becomes fresh or not busy, and every 1 s. It writes one decision
@@ -26,8 +33,10 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
   heartbeat. A state change logs a `host_busy`/`host_free` event. `GET /workers` shows
   `host_busy` and `foreign_cpu_mean`.
 - Endpoints now: `GET /health` (public), `GET /catalog`, `GET /workers[/{id}]`,
-  `POST /jobs`, `GET /jobs`, `GET /jobs/{id}`, `GET|PUT /scheduler` (PUT → 409 while any job
-  is non-terminal), `GET /events?after=&kind=&limit=` (admin: localhost or `X-Admin-Token`);
+  `POST /jobs`, `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` (202 = requested;
+  409 if terminal), `POST /workers/{id}/drain|enable`, `GET|PUT /scheduler` (PUT → 409
+  while any job is non-terminal), `GET /events?after=&kind=&limit=` (admin: localhost or
+  `X-Admin-Token`);
   `POST /workers/register`, `POST /workers/{id}/heartbeat`, `GET /jobs/{id}/input`
   (worker bearer token; input only for the assigned worker, token checked before state).
 
@@ -44,4 +53,4 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - A background task writes one telemetry_samples row per fresh worker every 5 s.
 
 ## Test
-`.\.venv\Scripts\python -m pytest tests/integration` (M3: `test_scheduling.py`)
+`.\.venv\Scripts\python -m pytest tests/integration` (M3: `test_scheduling.py`; M4: `test_reliability.py`, `test_e2e_m4.py`)

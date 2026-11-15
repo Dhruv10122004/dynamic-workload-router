@@ -29,13 +29,14 @@ from shared.schemas import (
     SCHEMA_VERSION, Assignment, HeartbeatReply, JobValidationError, RegisterReply, validate_assignment,
 )
 from worker.journal import Journal, row_to_snapshot
+from worker.recovery import recover
 from worker.supervisor import Supervisor, TransferCancelled
 from worker.telemetry import TelemetrySampler
 from worker.workloads import IMPLEMENTED
 
 log = logging.getLogger("dwr.agent")
 
-AGENT_VERSION = "1.0.0-m2"
+AGENT_VERSION = "1.0.0-m4"
 REQUEST_TIMEOUT_S = 3.0
 # Input download: connect quickly, tolerate slow Wi-Fi between chunks.
 DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
@@ -158,7 +159,7 @@ class Agent:
             "mem_floor_mb": self.cfg.mem_floor_mb,
             "supported_types": sorted(IMPLEMENTED),
             "capabilities": {"affinity": True, "cpu_quota": "not_enforced",
-                             "rss_watchdog": False, "memory_hard_limit": "not_enforced"},
+                             "rss_watchdog": True, "memory_hard_limit": "not_enforced"},
             "agent_version": AGENT_VERSION,
             "agent_instance_id": self.instance_id,
         }
@@ -266,6 +267,8 @@ class Agent:
 
     # ------------------------------------------------------------ main loop
     def run(self, stop: threading.Event) -> None:
+        # Plan §5.5: before the first heartbeat, nothing of a previous instance may survive.
+        recover(self.journal, self.supervisor.jobs_dir)
         sup = threading.Thread(target=self.supervisor.run, args=(stop,), name="supervisor", daemon=True)
         sup.start()
         last_prune = 0.0

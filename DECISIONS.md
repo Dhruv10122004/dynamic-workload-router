@@ -181,3 +181,46 @@ computes the duty per core, and warns when the target is unreachable; `--cpus al
 spreads the load over every core (it then also competes with the slot, which is still
 foreign load). The choice for the real experiment is the owner's (see m3 evidence).
 Alternatives rejected: silently using all cores. Plan §: 7.2, 12.6.
+
+### D-019 (2026-11-15, M4) Declared base memory 40 → 48 MB
+Context: the RSS watchdog kills at 110% of the declared memory (§5.4). Measured peaks of
+a cpu_hash job: Windows tree 34.4 MB (interpreter 30.2 + venv launcher 4.2), Linux
+interpreter 38.5 MB. With a 40 MB base the Linux limit (44 MB) left 5.5 MB of margin.
+Decision: `BASE_MEM_MB = 48` (limit 52.8 MB for cpu_hash). The watchdog sums RSS over
+the whole job tree, launcher included. A false `memory_limit` kill would corrupt results;
+8 MB more per job in the reservations is cheap.
+Alternatives rejected: a fixed slack on top of 110% (departs from the plan's rule).
+Plan §: 4, 5.4.
+
+### D-020 (2026-11-15, M4) Worker termination and recovery details
+Context: §5.4/§5.5 give the procedure; some cases are open.
+Decision:
+- Termination is a non-blocking state machine in the supervisor tick (sentinel → 2 s →
+  kill tree → verify ≤ 5 s), so one slow kill never blocks other slots or the heartbeat.
+- A process that exits 0 with a valid result during its termination is reported
+  SUCCEEDED (it really finished); otherwise KILLED(reason) with `termination_verified`
+  and `kill_latency_ms` (from the start of termination). Exit 3 is not required:
+  a supervisor-initiated termination is KILLED whatever the code.
+- Unverified → KILLED with `termination_verified=false` and the slot held as `stuck`; it
+  is released when those exact processes (pid + create_time) are gone.
+- Timers start at spawn; `timeout_s` is checked before `max_runtime_s`.
+- Recovery scope: only processes whose `--job-dir` is in this agent's jobs dir (so the
+  -Sim agent and the Edge agent on one host never kill each other's jobs). ACCEPTED rows
+  (never spawned) also end FAILED(agent_restart): jobs don't survive a restart.
+- A `spawns` table logs every spawn in the step-2 transaction (AC-4.5 evidence).
+Plan §: 5.3, 5.4, 5.5.
+
+### D-021 (2026-11-15, M4) Controller reliability details
+Context: §6.2/§6.5/§6.6 leave a few choices open.
+Decision:
+- Cancel: PENDING → CANCELLED at once; other non-terminal jobs get `cancel_requested`
+  (repeated in every reply); terminal → 409.
+- Staleness: after `STALE_S` without a heartbeat (counted from controller start for a
+  worker not yet heard from) → `worker_stale` event, host-busy window cleared, committed
+  ASSIGNED/ACCEPTED/RUNNING jobs → UNKNOWN. The next heartbeat logs `worker_fresh`.
+- Reconciliation runs on every applied snapshot: an UNKNOWN job not listed → ASSIGNED if
+  never acked (redelivered to the same worker), FAILED(lost) if acked.
+- `queue_timeout_s` belongs to the scheduler config (per experiment, PUT /scheduler,
+  default `DWR_QUEUE_TIMEOUT_S` = 300). `DWR_LOST_TIMEOUT_S` = 300 is a .env setting.
+- The UNKNOWN start time is read from job_events (no extra column).
+Plan §: 6.2, 6.5, 6.6, 8.2.

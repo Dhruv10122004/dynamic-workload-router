@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     accepted_at REAL NOT NULL,
     reported_at REAL
 );
+-- One row per spawn, written in the same transaction as step 2. Evidence for AC-4.5:
+-- no job_id may ever appear twice. Never pruned.
+CREATE TABLE IF NOT EXISTS spawns (
+    job_id TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    pid_create_time REAL,
+    ts REAL NOT NULL
+);
 """
 
 PRUNE_AFTER_S = 24 * 3600
@@ -76,7 +84,8 @@ class Journal:
     def mark_running(self, job_id: str, *, slot: int, pid: int, pid_create_time: float, job_dir: str,
                      spawn_s: float, transfer_bytes: int | None = None, transfer_s: float | None = None) -> None:
         self._update(job_id, JobState.RUNNING, slot=slot, pid=pid, pid_create_time=pid_create_time,
-                     job_dir=job_dir, spawn_s=spawn_s, transfer_bytes=transfer_bytes, transfer_s=transfer_s)
+                     job_dir=job_dir, spawn_s=spawn_s, transfer_bytes=transfer_bytes, transfer_s=transfer_s,
+                     _spawn=True)
 
     # -- step 3
     def mark_terminal(self, job_id: str, state: JobState, **fields) -> None:
@@ -115,6 +124,16 @@ class Journal:
                 "SELECT * FROM jobs WHERE state='ACCEPTED' ORDER BY accepted_at, rowid"
             ).fetchall()
 
+    def nonterminal_rows(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM jobs WHERE state IN ('ACCEPTED', 'RUNNING') ORDER BY accepted_at, rowid"
+            ).fetchall()
+
+    def spawn_counts(self) -> dict[str, int]:
+        with self._lock:
+            return {r[0]: r[1] for r in self._conn.execute("SELECT job_id, COUNT(*) FROM spawns GROUP BY job_id")}
+
     def snapshot_rows(self) -> list[sqlite3.Row]:
         """Every non-terminal job plus terminal jobs the controller has not acknowledged."""
         with self._lock:
@@ -122,16 +141,25 @@ class Journal:
                 "SELECT * FROM jobs WHERE reported_terminal=0 ORDER BY accepted_at, rowid"
             ).fetchall()
 
-    def _update(self, job_id: str, state: JobState, **fields) -> None:
+    def _update(self, job_id: str, state: JobState, _spawn: bool = False, **fields) -> None:
         with self._lock:
-            row = self._conn.execute("SELECT state FROM jobs WHERE job_id=?", (job_id,)).fetchone()
-            if row is None:
-                raise KeyError(job_id)
-            if not can_transition(row["state"], state):
-                raise ValueError(f"journal: {job_id} {row['state']} -> {state.value} not allowed")
-            cols = ["state=?"] + [f"{k}=?" for k in fields]
-            self._conn.execute(f"UPDATE jobs SET {', '.join(cols)} WHERE job_id=?",
-                               (state.value, *fields.values(), job_id))
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute("SELECT state FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                if not can_transition(row["state"], state):
+                    raise ValueError(f"journal: {job_id} {row['state']} -> {state.value} not allowed")
+                cols = ["state=?"] + [f"{k}=?" for k in fields]
+                self._conn.execute(f"UPDATE jobs SET {', '.join(cols)} WHERE job_id=?",
+                                   (state.value, *fields.values(), job_id))
+                if _spawn:
+                    self._conn.execute("INSERT INTO spawns (job_id, pid, pid_create_time, ts) VALUES (?,?,?,?)",
+                                       (job_id, fields["pid"], fields["pid_create_time"], time.time()))
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            self._conn.execute("COMMIT")
 
 
 def row_to_snapshot(row: sqlite3.Row) -> dict:

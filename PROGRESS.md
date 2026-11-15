@@ -1,7 +1,7 @@
 # Progress
 
-Branch: `v1`. Current milestone: **M3 code done**; AC-3.2 and AC-3.4 to be run on the real
-machines by the owner (runbook: docs/evidence/m3.md). M1 and M2 passed on hardware 2026-11-15.
+Branch: `v1`. Current milestone: **M4 code done**. M3 and M4 hardware ACs are waiting for
+the owner (runbooks: docs/evidence/m3.md, m4.md). M1 and M2 passed on hardware 2026-11-15.
 
 ## M0: Preserve the baseline — DONE
 - AC-0.1 PASS, AC-0.2 PASS — docs/evidence/m0.md
@@ -20,22 +20,29 @@ machines by the owner (runbook: docs/evidence/m3.md). M1 and M2 passed on hardwa
 - [x] GET/PUT /scheduler (409 while busy, persisted; D-016), GET /events, telemetry samples
 - [x] experiments/stress.py (D-018), burst.py, audit.py
 - AC-3.1, 3.3, 3.5 PASS; AC-3.2, 3.4 NOT RUN on hardware (reproduced locally)
-- Tests: `.\.venv\Scripts\python -m pytest` → 219 passed
+
+## M4 — CODE DONE, HARDWARE ACs NOT RUN
+- [x] cancel: PENDING (controller), ACCEPTED (never spawned), RUNNING (verified kill)
+- [x] timeout_s / max_runtime_s; RSS watchdog (tree RSS > 110% declared; base 48 MB, D-019)
+- [x] verified termination; stuck slots (D-020)
+- [x] staleness sweep → UNKNOWN → reconciliation; lost and queue timeouts (D-021)
+- [x] duplicate seq / assignment (journal + `spawns` log); agent restart recovery
+- [x] controller restart (state from SQLite; unheard workers go stale after STALE_S)
+- [x] POST /jobs/{id}/cancel, POST /workers/{id}/drain|enable
+- AC-4.5 PASS (local); AC-4.1–4.4, 4.6, 4.7 NOT RUN on hardware (reproduced locally)
+- Tests: `.\.venv\Scripts\python -m pytest` → 244 passed
 
 ## Next step
-Owner: copy the new code to the Linux laptop, run the m3 runbook. Then M4: cancel/kill,
-timers, watchdog, agent + controller restart recovery, staleness → UNKNOWN → lost,
-queue timeout.
+Owner: copy the new code to the Linux laptop; run the m3 and m4 runbooks. Then M5:
+dashboard on real data (Workers, Jobs, Decisions, Overview, Submit), legacy/ move.
 
 ## Known issues
 - Plan references PLAN_CRITIQUE.md, V1_CRITIQUE.md, PROJECT_PLAN_v2.md; not in the repo.
-- Cancel of a RUNNING job only logs a warning; timers, watchdog, restart recovery,
-  staleness → UNKNOWN, queue_timeout are M4. Jobs that can never be placed (e.g. EdgeOnly
-  with Edge down) wait forever until M4's queue timeout. stop.ps1 hard-kills: in-flight
-  jobs are lost.
 - Host-busy windows are in memory: a controller restart starts them empty (~5 s to re-detect).
+- stop.ps1 hard-kills the agent: its running jobs end FAILED(agent_restart) at the next start
+  (plan §5.5: jobs do not survive an agent restart).
 - Blob cache is never pruned (one file per distinct input size).
-- No systemd unit yet (Linux agent runs in a terminal).
+- No systemd unit yet (Linux agent runs in a terminal; Ctrl+C there also kills its jobs).
 - fog-1 (pop-os) has 2 cores / 3.7 GB RAM: one slot; with apps open, available < 512 MB
   floor and jobs wait (`mem_floor`). stress.py needs `--cpus all` there (D-018).
 - Fog transfers over the phone hotspot are slow (50 MiB in ~22 s); record the network

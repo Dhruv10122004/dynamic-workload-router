@@ -21,6 +21,7 @@ class SchedulerUpdate(BaseModel):
     host_busy_high: float | None = None
     host_busy_low: float | None = None
     aging_s: float | None = None
+    queue_timeout_s: float | None = None
 @public.get("/health")
 async def health(request: Request):
     """Unauthenticated so a worker host can check reachability with curl (DECISIONS D-008)."""
@@ -53,6 +54,17 @@ async def list_workers(request: Request):
 @router.get("/workers/{worker_id}")
 async def get_worker(worker_id: str, request: Request):
     return request.app.state.service.get_worker(worker_id)
+
+
+@router.post("/workers/{worker_id}/drain")
+async def drain_worker(worker_id: str, request: Request):
+    """No new assignments; running jobs finish (plan §8.2)."""
+    return await request.app.state.service.set_draining(worker_id, True)
+
+
+@router.post("/workers/{worker_id}/enable")
+async def enable_worker(worker_id: str, request: Request):
+    return await request.app.state.service.set_draining(worker_id, False)
 
 
 @router.get("/scheduler")

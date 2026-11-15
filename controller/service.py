@@ -3,6 +3,11 @@
 Placement (plan §6.3, §6.4): one pass over PENDING jobs (aged first, then FIFO with skip);
 each placement is one transaction: read committed jobs -> scheduler decide() -> decision
 row -> transition. Host-busy state (plan §7.2) is tracked per worker from heartbeats.
+
+Reliability (plan §6.5, §6.6): a 1 s maintenance sweep marks workers stale (their committed
+jobs -> UNKNOWN), fails UNKNOWN jobs after LOST_TIMEOUT_S and PENDING jobs after
+queue_timeout_s. A stale worker's next applied snapshot reconciles its UNKNOWN jobs.
+After a controller restart every worker counts as unheard-of until its first heartbeat.
 """
 from __future__ import annotations
 
@@ -60,6 +65,7 @@ class WorkerRuntime:
     last_seen_mono: float | None = None
     telemetry: dict | None = None
     host_busy: HostBusy = field(default_factory=HostBusy)
+    stale: bool = False   # marked by the sweep; cleared by the next heartbeat
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,7 @@ class SchedulerConfig:
     host_busy_high: float
     host_busy_low: float
     aging_s: float
+    queue_timeout_s: float = 300.0
 
     def validated(self) -> "SchedulerConfig":
         errors = []
@@ -79,6 +86,8 @@ class SchedulerConfig:
             errors.append({"loc": ["host_busy_low", "host_busy_high"], "msg": "need 0 <= low < high <= 100"})
         if self.aging_s <= 0:
             errors.append({"loc": ["aging_s"], "msg": "must be > 0"})
+        if self.queue_timeout_s <= 0:
+            errors.append({"loc": ["queue_timeout_s"], "msg": "must be > 0"})
         if errors:
             raise Invalid(errors)
         return self
@@ -101,14 +110,17 @@ class ControllerService:
         self._unknown_logged: set[tuple[str, str]] = set()
         self._kick: asyncio.Event | None = None
         self._tasks: list[asyncio.Task] = []
+        self.started_mono = time.monotonic()
         self.sched = self._load_scheduler_config()
         self.policy = make_policy(self.sched.policy, host_busy_enabled=self.sched.host_busy_enabled)
 
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         self._kick = asyncio.Event()
+        self.started_mono = time.monotonic()
         self._tasks = [asyncio.create_task(self._scheduler_loop(), name="scheduler"),
-                       asyncio.create_task(self._telemetry_loop(), name="telemetry")]
+                       asyncio.create_task(self._telemetry_loop(), name="telemetry"),
+                       asyncio.create_task(self._maintenance_loop(), name="maintenance")]
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -160,10 +172,98 @@ class ControllerService:
                                tel.get("mem_available_mb"), used.get(w["worker_id"], (0, 0))[0],
                                int(rt.host_busy.busy)))
 
+    # ------------------------------------------------------------ maintenance (plan §6.5)
+    async def _maintenance_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.settings.maintenance_interval_s)
+            try:
+                await self.maintenance()
+            except Exception:
+                log.exception("maintenance sweep failed")
+
+    def _runtime(self, worker_id: str) -> WorkerRuntime:
+        rt = self.rt.get(worker_id)
+        if rt is None:
+            rt = self.rt[worker_id] = WorkerRuntime(host_busy=self._new_tracker())
+        return rt
+
+    async def maintenance(self) -> int:
+        """Staleness sweep, lost timeout, queue timeout. Returns the number of jobs that ended."""
+        ended = 0
+        now, mono = time.time(), time.monotonic()
+        async with self.db.lock:
+            with self.db.tx() as c:
+                for w in c.execute("SELECT worker_id FROM workers").fetchall():
+                    wid = w["worker_id"]
+                    rt = self._runtime(wid)
+                    age = mono - (rt.last_seen_mono if rt.last_seen_mono is not None else self.started_mono)
+                    if age <= self.settings.stale_s:
+                        continue
+                    if not rt.stale:
+                        rt.stale = True
+                        was_busy = rt.host_busy.busy
+                        rt.host_busy = self._new_tracker()  # old samples say nothing about the future
+                        add_event(c, "worker_stale", worker_id=wid, ts=now, heartbeat_age_s=round(age, 2),
+                                  host_busy_cleared=was_busy)
+                        log.warning("worker %s is stale (no heartbeat for %.1f s)", wid, age)
+                    for j in c.execute(
+                            "SELECT job_id FROM jobs WHERE worker_id=? AND state IN ('ASSIGNED','ACCEPTED','RUNNING')",
+                            (wid,)).fetchall():
+                        transition_job(c, j["job_id"], JobState.UNKNOWN, "stale", ts=now)
+                for j in c.execute(
+                        """SELECT j.job_id, MAX(e.ts) since FROM jobs j JOIN job_events e
+                           ON e.job_id = j.job_id AND e.to_state = 'UNKNOWN'
+                           WHERE j.state = 'UNKNOWN' GROUP BY j.job_id""").fetchall():
+                    if now - j["since"] > self.settings.lost_timeout_s:
+                        transition_job(c, j["job_id"], JobState.FAILED, "lost_timeout", ts=now, fail_reason="lost",
+                                       end_ts=now, error=f"UNKNOWN for more than {self.settings.lost_timeout_s:.0f} s")
+                        ended += 1
+                for j in c.execute("SELECT job_id FROM jobs WHERE state='PENDING' AND submit_ts < ?",
+                                   (now - self.sched.queue_timeout_s,)).fetchall():
+                    transition_job(c, j["job_id"], JobState.FAILED, "queue_timeout", ts=now,
+                                   fail_reason="queue_timeout", end_ts=now,
+                                   error=f"PENDING for more than {self.sched.queue_timeout_s:.0f} s")
+                    ended += 1
+        if ended:
+            self.kick()
+        return ended
+
+    # ------------------------------------------------------------ cancel, drain (plan §8.2)
+    async def cancel(self, job_id: str) -> dict:
+        """PENDING -> CANCELLED now. Any other non-terminal job: cancel_requested, delivered in
+        every reply until the worker reports the outcome (requested, not confirmed)."""
+        now = time.time()
+        async with self.db.lock:
+            with self.db.tx() as c:
+                row = c.execute("SELECT state FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+                if row is None:
+                    raise NotFound(f"job {job_id!r} not found")
+                if is_terminal(row["state"]):
+                    raise Conflict(f"job {job_id!r} is already {row['state']}")
+                if row["state"] == JobState.PENDING.value:
+                    transition_job(c, job_id, JobState.CANCELLED, "cancel", ts=now, end_ts=now)
+                else:
+                    c.execute("UPDATE jobs SET cancel_requested=1 WHERE job_id=?", (job_id,))
+                add_event(c, "cancel_requested", job_id=job_id, ts=now, state=row["state"])
+                state = c.execute("SELECT state FROM jobs WHERE job_id=?", (job_id,)).fetchone()["state"]
+        return {"job_id": job_id, "cancel_requested": True, "state": state}
+
+    async def set_draining(self, worker_id: str, draining: bool) -> dict:
+        now = time.time()
+        async with self.db.lock:
+            with self.db.tx() as c:
+                if c.execute("UPDATE workers SET draining=? WHERE worker_id=?",
+                             (int(draining), worker_id)).rowcount == 0:
+                    raise NotFound(f"worker {worker_id!r} not found")
+                add_event(c, "worker_drain" if draining else "worker_enable", worker_id=worker_id, ts=now)
+        self.kick()
+        return self.get_worker(worker_id)
+
     # ------------------------------------------------------------ scheduler config
     def _load_scheduler_config(self) -> SchedulerConfig:
         s = self.settings
-        default = SchedulerConfig(s.policy, s.host_busy_enabled, s.host_busy_high, s.host_busy_low, s.aging_s)
+        default = SchedulerConfig(s.policy, s.host_busy_enabled, s.host_busy_high, s.host_busy_low, s.aging_s,
+                                  s.queue_timeout_s)
         row = self.db.one("SELECT config_json FROM scheduler_config WHERE id=1")
         if row is None:
             return default
@@ -269,9 +369,7 @@ class ControllerService:
             worker = self.db.one("SELECT * FROM workers WHERE worker_id=?", (worker_id,))
             if worker is None:
                 raise NotFound(f"worker {worker_id!r} is not registered")
-            rt = self.rt.get(worker_id)
-            if rt is None:
-                rt = self.rt[worker_id] = WorkerRuntime(host_busy=self._new_tracker())
+            rt = self._runtime(worker_id)
             was_fresh = self.is_fresh(worker_id)
             freed = False
             with self.db.tx() as c:
@@ -286,6 +384,10 @@ class ControllerService:
                 if apply:
                     rt.last_seq = hb.seq
                 rt.last_seen_mono = time.monotonic()
+                if rt.stale:
+                    rt.stale = False
+                    add_event(c, "worker_fresh", worker_id=worker_id, ts=now)
+                    log.info("worker %s is fresh again", worker_id)
                 rt.telemetry = hb.telemetry.model_dump()
                 c.execute("UPDATE workers SET last_heartbeat_ts=?, telemetry_json=? WHERE worker_id=?",
                           (now, json.dumps(rt.telemetry), worker_id))
@@ -345,7 +447,24 @@ class ControllerService:
                           error=str(e))
                 continue
             any_terminal |= terminal
-        return any_terminal
+        return self._reconcile_unknown(c, worker_id, {s.job_id for s in jobs}, now) or any_terminal
+
+    def _reconcile_unknown(self, c: sqlite3.Connection, worker_id: str, listed: set[str], now: float) -> bool:
+        """Plan §6.2: an UNKNOWN job the worker's snapshot does not list goes back to ASSIGNED
+        (never acked: never journaled, so it never ran; redelivered to the same worker) or
+        FAILED(lost) (acked but gone: the worker lost its journal). True if any job ended."""
+        ended = False
+        for j in c.execute("SELECT job_id, acked FROM jobs WHERE worker_id=? AND state='UNKNOWN'",
+                           (worker_id,)).fetchall():
+            if j["job_id"] in listed:
+                continue
+            if j["acked"]:
+                transition_job(c, j["job_id"], JobState.FAILED, "reconcile", ts=now, fail_reason="lost", end_ts=now,
+                               error="acked job missing from the worker's snapshot after reconnect")
+                ended = True
+            else:
+                transition_job(c, j["job_id"], JobState.ASSIGNED, "reconcile", ts=now)
+        return ended
 
     def _build_reply(self, worker_id: str, worker: sqlite3.Row, hb: Heartbeat) -> HeartbeatReply:
         listed = {j.job_id for j in hb.jobs}
@@ -464,6 +583,7 @@ class ControllerService:
             "heartbeat_age_s": self.heartbeat_age_s(r["worker_id"]), "fresh": self.is_fresh(r["worker_id"]),
             "draining": bool(r["draining"]), "telemetry": json.loads(r["telemetry_json"] or "null"),
             "host_busy": hb.busy,
+            "stale": bool(self.rt.get(r["worker_id"]) and self.rt[r["worker_id"]].stale),
             "foreign_cpu_mean": None if hb.mean is None else round(hb.mean, 1),
         }
 

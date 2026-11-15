@@ -101,7 +101,7 @@ def test_full_lifecycle_and_job_events(client):
 
     reply = w.beat()
     assert [a["job_id"] for a in reply["assignments"]] == [jid]
-    assert reply["assignments"][0]["mem_mb"] == 40 and reply["assignments"][0]["max_runtime_s"] == 120
+    assert reply["assignments"][0]["mem_mb"] == 48 and reply["assignments"][0]["max_runtime_s"] == 120
     # Level-triggered: re-delivered until the snapshot lists it.
     assert [a["job_id"] for a in w.beat()["assignments"]] == [jid]
 
