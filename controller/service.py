@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
+from controller import overview
 from controller.blobs import BlobStore
 from controller.db import Database, add_event, insert_job_event, transition_job
 from controller.settings import Settings
@@ -303,13 +304,14 @@ class ControllerService:
         self.kick()
         return self.get_scheduler()
 
-    def list_events(self, *, after: int, limit: int, kind: str | None = None) -> list[dict]:
+    def list_events(self, *, after: int, limit: int, kind: str | None = None,
+                    newest_first: bool = False) -> list[dict]:
         sql, params = "SELECT * FROM events WHERE id > ?", [after]
         if kind:
             sql += " AND kind=?"
             params.append(kind)
         out = []
-        for r in self.db.all(sql + " ORDER BY id LIMIT ?", (*params, limit)):
+        for r in self.db.all(sql + f" ORDER BY id {'DESC' if newest_first else 'ASC'} LIMIT ?", (*params, limit)):
             d = dict(r)
             d["details"] = json.loads(d.pop("details_json") or "null")
             out.append(d)
@@ -544,7 +546,7 @@ class ControllerService:
         return path
 
     def list_jobs(self, *, state: str | None, worker: str | None, run_id: str | None,
-                  limit: int, after: str | None) -> list[dict]:
+                  limit: int, after: str | None, newest_first: bool = False) -> list[dict]:
         where, params = [], []
         for col, val in (("state", state), ("worker_id", worker), ("run_id", run_id)):
             if val:
@@ -553,8 +555,22 @@ class ControllerService:
         if after:
             where.append("rowid > (SELECT rowid FROM jobs WHERE job_id=?)")
             params.append(after)
-        sql = "SELECT * FROM jobs" + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY rowid LIMIT ?"
+        order = "DESC" if newest_first else "ASC"
+        sql = "SELECT * FROM jobs" + (f" WHERE {' AND '.join(where)}" if where else "") + f" ORDER BY rowid {order} LIMIT ?"
         return [job_to_json(r) for r in self.db.all(sql, (*params, limit))]
+
+    def list_decisions(self, *, run_id: str | None, limit: int) -> list[dict]:
+        """Newest first, with the job's type and current state (Decisions view, plan §10)."""
+        sql = """SELECT d.*, j.type, j.state AS job_state, j.mem_mb, j.placement, j.run_id
+                 FROM decisions d JOIN jobs j ON j.job_id = d.job_id"""
+        params: tuple = ()
+        if run_id:
+            sql += " WHERE j.run_id = ?"
+            params = (run_id,)
+        return [decision_to_json(r) for r in self.db.all(sql + " ORDER BY d.id DESC LIMIT ?", (*params, limit))]
+
+    def overview(self, run_id: str | None = None) -> dict:
+        return {**overview.compute(self.db.conn, time.time(), run_id), "scheduler": asdict(self.sched)}
 
     # ------------------------------------------------------------ workers
     def list_workers(self) -> list[dict]:

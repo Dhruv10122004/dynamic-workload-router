@@ -1,3 +1,7 @@
+> **Note (V1, 2026-11):** this README describes the mid-term prototype, now in `legacy/`.
+> The V1 system (controller + real Edge/Fog worker agents) is specified in
+> `PROJECT_PLAN_V1.md`; status and how to run it: `PROGRESS.md`, `CLAUDE.md`.
+
 # Latency-Aware Dynamic Workload Offloading in a Cloud-Fog-Edge Continuum
 
 A context-aware dynamic placement and workload offloading system designed for heterogeneous computing environments. It bridges the gap between local resource constraints and cloud scalability by dynamically determining where computational tasks should execute across the Edge-Fog-Cloud continuum in real time.

@@ -1,4 +1,5 @@
-"""App factory (plan §3, §8): /api/v1 routers, restricted CORS, error mapping."""
+"""App factory (plan §3, §8, §10): /api/v1 routers, the built dashboard on the same
+origin, restricted CORS (only the Vite dev server), error mapping."""
 from __future__ import annotations
 
 import sqlite3
@@ -7,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from controller import api_admin, api_jobs, api_workers
 from controller.db import Database
@@ -49,5 +51,10 @@ def create_app(settings: Settings) -> FastAPI:
     @app.exception_handler(sqlite3.OperationalError)
     async def _db_unavailable(_: Request, e: sqlite3.OperationalError):
         return JSONResponse({"detail": f"database unavailable: {e}"}, status_code=503)
+
+    # Mounted last so every /api/v1 route wins. Without a build the API still works.
+    dist = settings.frontend_dist
+    if dist is not None and (dist / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=dist, html=True), name="dashboard")
 
     return app

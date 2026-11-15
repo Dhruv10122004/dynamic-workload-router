@@ -1,13 +1,13 @@
 # scripts/
 
-Install/run scripts for the two machines (plan §2 Install, §16.1). The legacy
-`load_generator.py` and `__init__.py` here are frozen mid-term code; they move to
-legacy/ in M5. Do not edit them.
+Install/run scripts for the two machines (plan §2 Install, §16.1). The mid-term
+`load_generator.py` moved to legacy/scripts/ in M5.
 
 ## Public interface
 - `setup.ps1 [-BindIp IP] [-EdgeSlots "2;4"] [-Port 8000]` (Windows): Python 3.10–3.12
-  venv, requirements, `.env` with fresh tokens (never overwrites), prints IPs, the fog-1
-  token and the firewall command (does not run it).
+  venv, requirements, dashboard build (`npm ci && npm run build` when Node is present),
+  `.env` with fresh tokens (never overwrites), prints IPs, the fog-1 token and the
+  firewall command (does not run it).
 - `start.ps1 [-Sim] [-EnvFile path]`: controller + Edge agent as hidden background
   processes; PID files `var\run\*.pid`, logs `var\logs\<name>.log`; refuses double starts
   and a busy port; waits for /health and fresh workers. `-Sim` adds a simulated Fog worker

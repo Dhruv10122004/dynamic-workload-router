@@ -31,10 +31,9 @@ Read PROGRESS.md first, then the plan section for the current milestone.
 
 ## Project quick reference
 
-Current milestone: see PROGRESS.md. Work happens on branch `v1`; the mid-term
-code (app/, router/, run_demo.py, scripts/load_generator.py, docker files) is
-frozen at tag `midterm-baseline` and must not be modified until M5 moves it to
-legacy/ with `git mv`.
+Current milestone: see PROGRESS.md. Work happens on branch `v1`. The mid-term
+code was moved unchanged to legacy/ in M5 (`git mv`); the pre-V1 tree is tagged
+`midterm-baseline`. Do not develop in legacy/.
 
 ### Invariants (plan §3) — never break these
 1. Only the controller listens. The controller never connects to a worker.
@@ -57,4 +56,6 @@ Every job state change goes through shared/states.py `transition()`.
 - Worker agent by hand: `.\.venv\Scripts\python -m worker.agent [--env-file path]`
 - Linux worker: `./scripts/setup.sh`, then `.venv/bin/python -m worker.agent`
 - Experiments: `python -m experiments.burst|audit|stress --help` (see experiments/CLAUDE.md)
+- Dashboard: `cd frontend; npm ci; npm run build`, then open http://127.0.0.1:8000/
+  (served by the controller)
 Note: in Git Bash `python` is an MSYS build without deps; use the venv python.

@@ -78,7 +78,20 @@ async def put_scheduler(body: SchedulerUpdate, request: Request):
     return await request.app.state.service.put_scheduler(body.model_dump(exclude_none=True))
 
 
+@router.get("/overview")
+async def get_overview(request: Request, run_id: str | None = None):
+    """Totals, per-state counts, per-tier placement and CPU-seconds, local offload, backlog and
+    the overflow metrics of plan §12.4."""
+    return request.app.state.service.overview(run_id)
+
+
+@router.get("/decisions")
+async def list_decisions(request: Request, run_id: str | None = None, limit: int = Query(200, ge=1, le=5000)):
+    return request.app.state.service.list_decisions(run_id=run_id, limit=limit)
+
+
 @router.get("/events")
 async def list_events(request: Request, after: int = 0, kind: str | None = None,
-                      limit: int = Query(500, ge=1, le=5000)):
-    return request.app.state.service.list_events(after=after, limit=limit, kind=kind)
+                      limit: int = Query(500, ge=1, le=5000), order: str = Query("asc", pattern="^(asc|desc)$")):
+    """`order=desc` returns the newest events first (dashboard feed)."""
+    return request.app.state.service.list_events(after=after, limit=limit, kind=kind, newest_first=order == "desc")

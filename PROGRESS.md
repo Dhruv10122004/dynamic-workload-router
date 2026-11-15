@@ -1,7 +1,8 @@
 # Progress
 
-Branch: `v1`. Current milestone: **M4 code done**. M3 and M4 hardware ACs are waiting for
-the owner (runbooks: docs/evidence/m3.md, m4.md). M1 and M2 passed on hardware 2026-11-15.
+Branch: `v1`. Current milestone: **M5 code done**. M3, M4 and M5 hardware ACs are waiting
+for the owner (runbooks: docs/evidence/m3.md, m4.md, m5.md). M1 and M2 passed on hardware
+2026-11-15.
 
 ## M0: Preserve the baseline — DONE
 - AC-0.1 PASS, AC-0.2 PASS — docs/evidence/m0.md
@@ -30,11 +31,19 @@ the owner (runbooks: docs/evidence/m3.md, m4.md). M1 and M2 passed on hardware 2
 - [x] controller restart (state from SQLite; unheard workers go stale after STALE_S)
 - [x] POST /jobs/{id}/cancel, POST /workers/{id}/drain|enable
 - AC-4.5 PASS (local); AC-4.1–4.4, 4.6, 4.7 NOT RUN on hardware (reproduced locally)
-- Tests: `.\.venv\Scripts\python -m pytest` → 244 passed
+
+## M5 — CODE DONE, HARDWARE AC NOT RUN
+- [x] Workers, Jobs, Decisions, Overview, Submit views on real API data (frontend/)
+- [x] same-origin API; controller serves frontend/dist; setup.ps1 builds it
+- [x] GET /overview, GET /decisions, newest-first lists (D-022)
+- [x] mid-term code moved to legacy/ with git mv (D-023)
+- AC-5.1 PASS by grep (owner review pending); AC-5.2 PASS (local); AC-5.3 NOT RUN on hardware
+- Tests: `.\.venv\Scripts\python -m pytest` → 250 passed; `npm run lint` clean
 
 ## Next step
-Owner: copy the new code to the Linux laptop; run the m3 and m4 runbooks. Then M5:
-dashboard on real data (Workers, Jobs, Decisions, Overview, Submit), legacy/ move.
+Owner: copy the new code to the Linux laptop; run the m3, m4 and m5 runbooks (one session).
+Then M6: gen_trace.py, replay.py, analyze.py, run tagging (POST /runs, export), reference
+timing run, load sweep.
 
 ## Known issues
 - Plan references PLAN_CRITIQUE.md, V1_CRITIQUE.md, PROJECT_PLAN_v2.md; not in the repo.
@@ -49,4 +58,5 @@ dashboard on real data (Workers, Jobs, Decisions, Overview, Submit), legacy/ mov
   with every experiment.
 - Linux copy was made by zip, not git: code changes need re-copying (keep its `.env`).
 - One full test run (of ~10) in M2 had 4 timing-related e2e failures not reproduced since.
-- `app/scripts/load_test.py` is untracked pre-existing work; left untouched.
+- `app/scripts/load_test.py` is untracked pre-existing work; left in app/scripts/ (not moved).
+- README.md still describes the mid-term prototype (a pointer note was added).

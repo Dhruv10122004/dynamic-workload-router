@@ -16,8 +16,11 @@ async def submit(sub: JobSubmit, request: Request):
 
 @router.get("/jobs")
 async def list_jobs(request: Request, state: str | None = None, worker: str | None = None,
-                    run_id: str | None = None, limit: int = Query(100, ge=1, le=5000), after: str | None = None):
-    return request.app.state.service.list_jobs(state=state, worker=worker, run_id=run_id, limit=limit, after=after)
+                    run_id: str | None = None, limit: int = Query(100, ge=1, le=5000), after: str | None = None,
+                    order: str = Query("asc", pattern="^(asc|desc)$")):
+    """`order=desc` returns the newest jobs first (dashboard); `after` pages in ascending order."""
+    return request.app.state.service.list_jobs(state=state, worker=worker, run_id=run_id, limit=limit, after=after,
+                                               newest_first=order == "desc")
 
 
 @router.get("/jobs/{job_id}")

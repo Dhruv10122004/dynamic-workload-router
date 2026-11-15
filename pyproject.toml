@@ -17,7 +17,7 @@ test = ["pytest==9.1.1", "requests==2.32.3"]
 
 [tool.pytest.ini_options]
 # tests/ = V1; app/Tests = legacy mid-term tests (file pattern tests_*.py).
-testpaths = ["tests", "app/Tests"]
+testpaths = ["tests", "legacy/app/Tests"]
 python_files = ["test_*.py", "tests_*.py"]
 addopts = "-ra"
 markers = [

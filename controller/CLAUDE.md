@@ -4,6 +4,8 @@ The only process that listens (FastAPI, /api/v1). Owns the SQLite source of trut
 handles registration and heartbeats, accepts jobs, places them. Implements plan §6, §8, §9.
 
 ## Public interface
+- Serves the built dashboard (`frontend/dist`, `Settings.frontend_dist`) at `/` on the
+  same origin, mounted after the API so `/api/v1` always wins.
 - Run: `python -m controller [--env-file PATH|-] [--log-file PATH]`; binds every
   `DWR_BIND_HOSTS` address; pins itself to `DWR_CONTROLLER_CPUS` (default: every core not
   in `DWR_SLOT_CPUS`), reported as `controller_cpus` by /health.
@@ -17,7 +19,10 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - `service.ControllerService`: `register`, `heartbeat`, `submit`, `get_job`, `list_jobs`,
   `list_workers`, `get_worker`, `schedule_pass`, `is_fresh`, `get_scheduler`,
   `put_scheduler`, `list_events`, `sample_telemetry`, `maintenance`, `cancel`,
-  `set_draining`. Raises `NotFound/Conflict/Invalid`.
+  `set_draining`, `overview`, `list_decisions`. Raises `NotFound/Conflict/Invalid`.
+- `overview.compute(conn, now, run_id=None)`: totals, per-state, per-tier placed /
+  completed / CPU-s, local offload %, backlog, peak backlog, overflow jobs / demand / time
+  (plan §10, §12.4; D-022). Read-only.
 - Reliability (plan §6.5, §6.6; D-021): `maintenance()` runs every 1 s. Stale workers get a
   `worker_stale` event and their committed jobs go to UNKNOWN. UNKNOWN longer than
   `DWR_LOST_TIMEOUT_S` → FAILED(lost); PENDING longer than `queue_timeout_s` →
@@ -35,8 +40,9 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - Endpoints now: `GET /health` (public), `GET /catalog`, `GET /workers[/{id}]`,
   `POST /jobs`, `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` (202 = requested;
   409 if terminal), `POST /workers/{id}/drain|enable`, `GET|PUT /scheduler` (PUT → 409
-  while any job is non-terminal), `GET /events?after=&kind=&limit=` (admin: localhost or
-  `X-Admin-Token`);
+  while any job is non-terminal), `GET /events?after=&kind=&limit=&order=`,
+  `GET /overview?run_id=`, `GET /decisions?run_id=&limit=`, `GET /jobs?order=desc`
+  (admin: localhost or `X-Admin-Token`);
   `POST /workers/register`, `POST /workers/{id}/heartbeat`, `GET /jobs/{id}/input`
   (worker bearer token; input only for the assigned worker, token checked before state).
 
@@ -53,4 +59,5 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - A background task writes one telemetry_samples row per fresh worker every 5 s.
 
 ## Test
-`.\.venv\Scripts\python -m pytest tests/integration` (M3: `test_scheduling.py`; M4: `test_reliability.py`, `test_e2e_m4.py`)
+`.\.venv\Scripts\python -m pytest tests/integration` (M3: `test_scheduling.py`; M4: `test_reliability.py`, `test_e2e_m4.py`;
+M5: `test_dashboard_api.py`)

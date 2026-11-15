@@ -28,6 +28,8 @@ class Settings:
     scheduler_interval_s: float = 1.0
     cors_origins: tuple[str, ...] = field(default=("http://localhost:5173", "http://127.0.0.1:5173"))
     controller_cpus: tuple[int, ...] | None = None
+    # Built dashboard (plan §10), served on the same origin when present.
+    frontend_dist: Path | None = Path(__file__).resolve().parents[1] / "frontend" / "dist"
     # Scheduler defaults (plan §6.4, §7.2, §7.3); PUT /scheduler overrides them and the
     # active values are kept in SQLite (DECISIONS D-016).
     policy: str = "LocalFirst"

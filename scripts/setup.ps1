@@ -4,7 +4,8 @@
 
 .DESCRIPTION
   Re-runnable: never overwrites an existing .env. Prints (does not run) the firewall
-  command, which needs an elevated prompt. The dashboard build arrives in M5.
+  command, which needs an elevated prompt. Builds the dashboard (frontend/dist) when
+  Node.js is installed; the controller serves it at http://127.0.0.1:<port>/.
 
 .EXAMPLE
   .\scripts\setup.ps1 -BindIp 192.168.1.10 -EdgeSlots "2;4"
@@ -36,6 +37,21 @@ if (-not (Test-Path -LiteralPath $venvPy)) {
 & $venvPy -m pip install --quiet -r (Join-Path $root 'requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
 Write-Host 'dependencies installed' -ForegroundColor Green
+
+# ---- Dashboard build (plan sec. 10): served by the controller from frontend/dist --------
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+    Push-Location (Join-Path $root 'frontend')
+    try {
+        # cmd /c: npm writes progress to stderr, which PowerShell 5.1 would treat as an error.
+        cmd /c "npm ci --no-audit --no-fund && npm run build"
+        if ($LASTEXITCODE -ne 0) { throw "dashboard build failed (npm exit $LASTEXITCODE)" }
+    } finally {
+        Pop-Location
+    }
+    Write-Host 'dashboard built: frontend\dist' -ForegroundColor Green
+} else {
+    Write-Host 'Node.js/npm not found: dashboard not built (the API works without it).' -ForegroundColor Yellow
+}
 
 # ---- .env --------------------------------------------------------------------------------
 $envPath = Join-Path $root '.env'

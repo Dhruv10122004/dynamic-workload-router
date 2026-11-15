@@ -224,3 +224,30 @@ Decision:
   default `DWR_QUEUE_TIMEOUT_S` = 300). `DWR_LOST_TIMEOUT_S` = 300 is a .env setting.
 - The UNKNOWN start time is read from job_events (no extra column).
 Plan §: 6.2, 6.5, 6.6, 8.2.
+
+### D-022 (2026-11-15, M5) Dashboard data endpoints and Overview definitions
+Context: §10 lists the views; §8.2 has no endpoint for a decisions list and lists are
+ascending only. Overview terms ("local offload", peak backlog) need exact definitions.
+Decision: add `GET /decisions?run_id=&limit=` (newest first, joined with the job's type,
+state, mem_mb), `order=desc` on `GET /jobs` and `GET /events`, and `GET /overview?run_id=`
+(computed in `controller/overview.py`). Definitions: completed = SUCCEEDED; per tier =
+the tier of the job's worker; local offload % = completed jobs (and their `cpu_s`) not
+on the lowest-ranked *registered* tier; backlog = PENDING now; peak backlog and
+overflow time (queue non-empty) from replaying PENDING entries/exits in job_events;
+overflow demand = Σ `exec_s` of overflow jobs. The dashboard is served by the controller
+via StaticFiles mounted after the API. A stale worker's card keeps its last telemetry,
+labelled as last reported.
+Alternatives rejected: computing metrics in the browser (would duplicate §12.4 logic).
+Plan §: 8.2, 10, 12.4.
+
+### D-023 (2026-11-15, M5) Legacy move and frontend clean-up
+Context: M5 moves the mid-term code to legacy/ and rewires the existing React app.
+Decision: `git mv` of the tracked files app/, router/, run_demo.py,
+scripts/load_generator.py, scripts/__init__.py, Dockerfile, docker-compose.yml into
+legacy/ (paths inside stay relative, so it runs from legacy/). The untracked
+`app/scripts/load_test.py` is the owner's and was left where it is. pytest now collects
+`legacy/app/Tests`. The React app keeps React + Vite; the scripted demo, the topology
+graph, App.css, unused assets, the Google Fonts import and the lucide-react dependency
+were removed. The root README gets a pointer that it describes the mid-term prototype
+(a V1 README is the owner's call).
+Plan §: 10, 11, M5.
