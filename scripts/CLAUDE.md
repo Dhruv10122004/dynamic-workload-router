@@ -16,7 +16,7 @@ legacy/ in M5. Do not edit them.
 - `stop.ps1 [-Quiet]`: kills each PID-file process tree (after checking the command line,
   PIDs get reused), verifies it is gone, kills orphan `worker.workloads` processes.
 - `dwr-common.ps1`: helpers dot-sourced by the three scripts.
-- `setup.sh` (Linux Fog worker): Python 3.10–3.12, `.venv`, requirements, `.env` prompts
+- `setup.sh` (Linux Fog worker): Python 3.10–3.12, `.venv` (rebuilt if it has no pip), requirements, `.env` prompts
   (mode 600), curls `/api/v1/health`.
 - Coming: systemd unit `deploy/systemd/dwr-worker.service`, `doctor.py`.
 

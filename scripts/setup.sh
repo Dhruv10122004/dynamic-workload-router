@@ -21,8 +21,14 @@ fi
 echo "using $("$PY" --version) at $(command -v "$PY")"
 
 # --- venv + dependencies -----------------------------------------------------------
+# A failed earlier run (no python3-venv) leaves a .venv without pip: rebuild it.
+if [ -x "$ROOT/.venv/bin/python" ] && ! "$ROOT/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    echo "existing .venv has no pip; recreating it"
+    rm -rf "$ROOT/.venv"
+fi
 if [ ! -x "$ROOT/.venv/bin/python" ]; then
     "$PY" -m venv "$ROOT/.venv" || {
+        rm -rf "$ROOT/.venv"
         echo "error: venv creation failed; on Debian/Ubuntu: sudo apt install ${PY}-venv" >&2; exit 1; }
 fi
 "$ROOT/.venv/bin/python" -m pip install --quiet --upgrade pip
