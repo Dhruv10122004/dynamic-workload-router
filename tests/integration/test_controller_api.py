@@ -85,7 +85,6 @@ def test_submit_validation_422_creates_no_record(client):
     register(client)
     assert submit(client, params={"iterations": 5}).status_code == 422
     assert submit(client, type="nope").status_code == 422
-    assert submit(client, placement="auto").status_code == 422
     assert submit(client, placement="ghost").status_code == 422
     assert submit(client, timeout_s=500).status_code == 422
     assert client.get("/api/v1/jobs", headers=ADMIN).json() == []
@@ -153,11 +152,17 @@ def test_worker_validation_failure_is_recorded(client):
 
 def test_structural_reject_and_pending_when_stale(client):
     register(client, supported_types=["cpu_hash"])
-    # Not fresh yet (no heartbeat): stays PENDING, no decision row.
+    # Not fresh yet (no heartbeat): stays PENDING; the first attempt is recorded and flags overflow.
     jid = submit(client).json()["job_id"]
     time.sleep(0.3)
     job = client.get(f"/api/v1/jobs/{jid}", headers=ADMIN).json()
-    assert job["state"] == "PENDING" and job["decision"] is None
+    assert job["state"] == "PENDING" and job["overflow"]
+    assert job["decision"]["worker_id"] is None and job["decision"]["ineligible"] == {"fog-1": "stale"}
+    assert not job["decision"]["structural_reject"]
+    n = len(client.get("/api/v1/events", headers=ADMIN).json())
+    time.sleep(0.2)  # later no-op passes add no decision rows
+    assert client.get(f"/api/v1/jobs/{jid}", headers=ADMIN).json()["decision"]["id"] == job["decision"]["id"]
+    assert len(client.get("/api/v1/events", headers=ADMIN).json()) == n
     # mem_touch is not supported by fog-1 -> REJECTED with the reason.
     jid2 = submit(client, type="mem_touch", params={"mem_mb": 64, "hold_s": 1}).json()["job_id"]
     job2 = wait_state(client, jid2, "REJECTED")

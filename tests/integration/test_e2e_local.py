@@ -216,3 +216,24 @@ def test_worker_freshness_updates_every_second(stack):
         ages.append(c.get("/workers/fog-1").json()["heartbeat_age_s"])
         time.sleep(0.5)
     assert max(ages) < 2.0
+
+
+# ---------------------------------------------------------------- M3
+
+def test_auto_placement_fills_edge_then_fog_then_waits(stack):
+    """AC-3.2 with real agents: 5 auto jobs on 2 + 2 slots -> 2 Edge, 2 Fog, 1 waits, then runs."""
+    c, _ = stack
+    if NCPU < 5:
+        pytest.skip("needs >= 5 logical cores")
+    _wait(lambda: all(w["slots_used"] == 0 for w in c.get("/workers").json()), 30, "workers not idle")
+    ids = [_submit(c, "auto", "mem_touch", {"mem_mb": 16, "hold_s": 3}) for _ in range(5)]
+    _wait(lambda: sum(c.get(f"/jobs/{j}").json()["state"] == "RUNNING" for j in ids) == 4, 20,
+          "four jobs never ran at once")
+    jobs = [c.get(f"/jobs/{j}").json() for j in ids]
+    assert [j["worker_id"] for j in jobs[:4]] == ["edge-1", "edge-1", "fog-1", "fog-1"]
+    assert jobs[4]["state"] == "PENDING" and jobs[4]["overflow"]
+    assert jobs[4]["decision"]["ineligible"] == {"edge-1": "no_free_slot", "fog-1": "no_free_slot"}
+    last = _wait_terminal(c, ids[4])
+    assert last["state"] == "SUCCEEDED"  # placed on whichever slot freed first
+    for j in ids[:4]:
+        assert _wait_terminal(c, j)["state"] == "SUCCEEDED"

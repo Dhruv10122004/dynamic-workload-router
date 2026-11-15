@@ -1,8 +1,8 @@
 """Controller logic (plan §6): registration, heartbeat handling, submission, scheduling loop.
 
-M1 scope: placement must name a worker (`_pinned_decision`). M3 replaces that with the
-pure scheduler/ package; the transaction shape (one placement = one tx with its
-decision record) already matches plan §6.3.
+Placement (plan §6.3, §6.4): one pass over PENDING jobs (aged first, then FIFO with skip);
+each placement is one transaction: read committed jobs -> scheduler decide() -> decision
+row -> transition. Host-busy state (plan §7.2) is tracked per worker from heartbeats.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import logging
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -24,11 +24,12 @@ from shared.schemas import (
     SCHEMA_VERSION, Assignment, Heartbeat, HeartbeatReply, JobSnapshot, JobSubmit, JobValidationError,
     RegisterReply, RegisterRequest, validate_job,
 )
+from scheduler import HostBusy, JobView, WorkerView, make_policy
+from scheduler.eligibility import could_ever_run
+from scheduler.policies import POLICIES
 from shared.states import COMMITTED, NON_TERMINAL, IllegalTransition, JobState, is_terminal
 
 log = logging.getLogger("dwr.controller")
-
-M1_POLICY = "pinned_m1"
 
 
 class ServiceError(Exception):
@@ -58,6 +59,29 @@ class WorkerRuntime:
     last_seq: int = -1
     last_seen_mono: float | None = None
     telemetry: dict | None = None
+    host_busy: HostBusy = field(default_factory=HostBusy)
+
+
+@dataclass(frozen=True)
+class SchedulerConfig:
+    """Active policy and host-busy settings (plan §7.3, GET/PUT /scheduler; DECISIONS D-016)."""
+    policy: str
+    host_busy_enabled: bool
+    host_busy_high: float
+    host_busy_low: float
+    aging_s: float
+
+    def validated(self) -> "SchedulerConfig":
+        errors = []
+        if self.policy not in POLICIES:
+            errors.append({"loc": ["policy"], "msg": f"unknown policy; choose one of {sorted(POLICIES)}"})
+        if not 0 <= self.host_busy_low < self.host_busy_high <= 100:
+            errors.append({"loc": ["host_busy_low", "host_busy_high"], "msg": "need 0 <= low < high <= 100"})
+        if self.aging_s <= 0:
+            errors.append({"loc": ["aging_s"], "msg": "must be > 0"})
+        if errors:
+            raise Invalid(errors)
+        return self
 
 
 def token_hash(token: str) -> str:
@@ -76,18 +100,22 @@ class ControllerService:
         self.blobs = BlobStore(settings.data_dir / "blobs")
         self._unknown_logged: set[tuple[str, str]] = set()
         self._kick: asyncio.Event | None = None
-        self._task: asyncio.Task | None = None
+        self._tasks: list[asyncio.Task] = []
+        self.sched = self._load_scheduler_config()
+        self.policy = make_policy(self.sched.policy, host_busy_enabled=self.sched.host_busy_enabled)
 
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         self._kick = asyncio.Event()
-        self._task = asyncio.create_task(self._scheduler_loop(), name="scheduler")
+        self._tasks = [asyncio.create_task(self._scheduler_loop(), name="scheduler"),
+                       asyncio.create_task(self._telemetry_loop(), name="telemetry")]
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
                 pass
 
@@ -106,6 +134,86 @@ class ControllerService:
                 await self.schedule_pass()
             except Exception:
                 log.exception("scheduler pass failed")
+
+    async def _telemetry_loop(self) -> None:
+        """One telemetry_samples row per fresh worker every telemetry_sample_s (plan §6.5)."""
+        while True:
+            await asyncio.sleep(self.settings.telemetry_sample_s)
+            try:
+                await self.sample_telemetry()
+            except Exception:
+                log.exception("telemetry sampling failed")
+
+    async def sample_telemetry(self) -> None:
+        now = time.time()
+        async with self.db.lock:
+            used = self._committed_usage()
+            with self.db.tx() as c:
+                for w in c.execute("SELECT worker_id FROM workers").fetchall():
+                    rt = self.rt.get(w["worker_id"])
+                    if rt is None or rt.telemetry is None or not self.is_fresh(w["worker_id"]):
+                        continue
+                    tel = rt.telemetry
+                    c.execute("""INSERT INTO telemetry_samples (worker_id, ts, cpu_pct, foreign_cpu_pct,
+                                   mem_available_mb, slots_used, host_busy) VALUES (?,?,?,?,?,?,?)""",
+                              (w["worker_id"], now, tel.get("cpu_pct"), tel.get("foreign_cpu_pct"),
+                               tel.get("mem_available_mb"), used.get(w["worker_id"], (0, 0))[0],
+                               int(rt.host_busy.busy)))
+
+    # ------------------------------------------------------------ scheduler config
+    def _load_scheduler_config(self) -> SchedulerConfig:
+        s = self.settings
+        default = SchedulerConfig(s.policy, s.host_busy_enabled, s.host_busy_high, s.host_busy_low, s.aging_s)
+        row = self.db.one("SELECT config_json FROM scheduler_config WHERE id=1")
+        if row is None:
+            return default
+        try:
+            return SchedulerConfig(**{**asdict(default), **json.loads(row["config_json"])}).validated()
+        except (Invalid, TypeError, ValueError):
+            log.warning("stored scheduler config is invalid; using the .env defaults")
+            return default
+
+    def _new_tracker(self, old: HostBusy | None = None) -> HostBusy:
+        hb = HostBusy(high=self.sched.host_busy_high, low=self.sched.host_busy_low)
+        if old is not None:
+            hb.busy = old.busy
+            hb.samples.extend(old.samples)
+        return hb
+
+    def get_scheduler(self) -> dict:
+        return {**asdict(self.sched), "policies": sorted(POLICIES)}
+
+    async def put_scheduler(self, changes: dict) -> dict:
+        """Plan §7.3: refused with 409 while any job is non-terminal, so a run has one policy."""
+        async with self.db.lock:
+            busy = self.db.one(f"SELECT COUNT(*) n FROM jobs WHERE state IN {_in(NON_TERMINAL)}")["n"]
+            if busy:
+                raise Conflict(f"{busy} job(s) are not terminal; the scheduler can change only when idle")
+            new = replace(self.sched, **changes).validated()
+            now = time.time()
+            with self.db.tx() as c:
+                c.execute("""INSERT INTO scheduler_config (id, config_json, updated_ts) VALUES (1, ?, ?)
+                             ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json,
+                               updated_ts=excluded.updated_ts""", (json.dumps(asdict(new)), now))
+                add_event(c, "scheduler_changed", ts=now, old=asdict(self.sched), new=asdict(new))
+            self.sched = new
+            self.policy = make_policy(new.policy, host_busy_enabled=new.host_busy_enabled)
+            for rt in self.rt.values():
+                rt.host_busy = self._new_tracker(rt.host_busy)
+        self.kick()
+        return self.get_scheduler()
+
+    def list_events(self, *, after: int, limit: int, kind: str | None = None) -> list[dict]:
+        sql, params = "SELECT * FROM events WHERE id > ?", [after]
+        if kind:
+            sql += " AND kind=?"
+            params.append(kind)
+        out = []
+        for r in self.db.all(sql + " ORDER BY id LIMIT ?", (*params, limit)):
+            d = dict(r)
+            d["details"] = json.loads(d.pop("details_json") or "null")
+            out.append(d)
+        return out
 
     # ------------------------------------------------------------ freshness
     def is_fresh(self, worker_id: str) -> bool:
@@ -161,8 +269,11 @@ class ControllerService:
             worker = self.db.one("SELECT * FROM workers WHERE worker_id=?", (worker_id,))
             if worker is None:
                 raise NotFound(f"worker {worker_id!r} is not registered")
-            rt = self.rt.setdefault(worker_id, WorkerRuntime())
+            rt = self.rt.get(worker_id)
+            if rt is None:
+                rt = self.rt[worker_id] = WorkerRuntime(host_busy=self._new_tracker())
             was_fresh = self.is_fresh(worker_id)
+            freed = False
             with self.db.tx() as c:
                 apply = True
                 if rt.instance_id != hb.agent_instance_id:
@@ -178,9 +289,17 @@ class ControllerService:
                 rt.telemetry = hb.telemetry.model_dump()
                 c.execute("UPDATE workers SET last_heartbeat_ts=?, telemetry_json=? WHERE worker_id=?",
                           (now, json.dumps(rt.telemetry), worker_id))
+                if apply and rt.host_busy.add(hb.telemetry.foreign_cpu_pct):
+                    busy = rt.host_busy.busy
+                    freed = not busy
+                    add_event(c, "host_busy" if busy else "host_free", worker_id=worker_id, ts=now,
+                              mean_foreign_cpu_pct=round(rt.host_busy.mean, 1),
+                              samples=len(rt.host_busy.samples), enforced=self.sched.host_busy_enabled)
+                    log.info("worker %s is %s (foreign CPU mean %.1f%%)", worker_id,
+                             "host_busy" if busy else "free again", rt.host_busy.mean)
                 changed = self._apply_snapshot(c, worker_id, hb.jobs, now) if apply else False
             reply = self._build_reply(worker_id, worker, hb)
-        if changed or not was_fresh:
+        if changed or freed or not was_fresh:
             self.kick()
         reply.server_processing_ms = (time.perf_counter() - t0) * 1000
         return reply
@@ -258,10 +377,7 @@ class ControllerService:
             v = validate_job(sub.type, sub.params, sub.timeout_s, test_mode=self.settings.test_mode)
         except JobValidationError as e:
             raise Invalid(e.errors) from None
-        if sub.placement == "auto":
-            raise Invalid([{"loc": ["placement"],
-                            "msg": "placement=auto arrives with the scheduler in M3; name a worker_id"}])
-        if self.db.one("SELECT 1 FROM workers WHERE worker_id=?", (sub.placement,)) is None:
+        if sub.placement != "auto" and self.db.one("SELECT 1 FROM workers WHERE worker_id=?", (sub.placement,)) is None:
             raise Invalid([{"loc": ["placement"], "msg": f"unknown worker {sub.placement!r}"}])
         input_bytes = v.params.get("input_bytes", 0)
         # Blob generation is CPU work: keep it off the event loop (invariant 4).
@@ -336,6 +452,7 @@ class ControllerService:
             f"SELECT COUNT(*) n, COALESCE(SUM(mem_mb),0) mem FROM jobs WHERE worker_id=? AND state IN {_in(COMMITTED)}",
             (r["worker_id"],))
         slots = json.loads(r["slots_json"])
+        hb = (self.rt.get(r["worker_id"]) or WorkerRuntime()).host_busy
         return {
             "worker_id": r["worker_id"], "tier": r["tier"], "hostname": r["hostname"], "os": r["os"],
             "os_version": r["os_version"], "python": r["python"], "cpu_logical": r["cpu_logical"],
@@ -346,65 +463,81 @@ class ControllerService:
             "registered_at": r["registered_at"], "last_heartbeat_ts": r["last_heartbeat_ts"],
             "heartbeat_age_s": self.heartbeat_age_s(r["worker_id"]), "fresh": self.is_fresh(r["worker_id"]),
             "draining": bool(r["draining"]), "telemetry": json.loads(r["telemetry_json"] or "null"),
+            "host_busy": hb.busy,
+            "foreign_cpu_mean": None if hb.mean is None else round(hb.mean, 1),
         }
 
     # ------------------------------------------------------------ scheduling
     async def schedule_pass(self) -> int:
-        """One FIFO pass over PENDING jobs; one transaction per placement. Returns placements made."""
+        """One pass over PENDING jobs (plan §6.4): jobs pending longer than aging_s first, then
+        FIFO; a job that can't be placed doesn't block the ones behind it. Each placement is one
+        transaction (plan §6.3). Returns the number of placements made.
+
+        Decision rows (DECISIONS D-015): one for every placement or reject, plus one at a job's
+        first attempt when it stays PENDING; that job gets overflow=1 (plan §12.4)."""
         placed = 0
         async with self.db.lock:
-            pending = self.db.all("SELECT job_id FROM jobs WHERE state='PENDING' ORDER BY submit_ts, rowid")
+            aged_before = time.time() - self.sched.aging_s
+            pending = self.db.all(
+                "SELECT job_id FROM jobs WHERE state='PENDING' ORDER BY (submit_ts >= ?), submit_ts, rowid",
+                (aged_before,))
+            held: frozenset[str] = frozenset()  # workers reserved for an aged job (DECISIONS D-017)
             for (job_id,) in pending:
                 t0 = time.perf_counter()
                 with self.db.tx() as c:
                     job = c.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
                     if job is None or job["state"] != JobState.PENDING.value:
                         continue
-                    worker, chosen, ineligible, structural = self._pinned_decision(c, job)
-                    if chosen is None and not structural:
-                        continue  # stays PENDING; no decision row for a no-op pass
+                    workers = self._worker_views(c)
+                    view = JobView(job_id, job["type"], job["mem_mb"], job["placement"])
+                    aged = job["submit_ts"] < aged_before
+                    d = self.policy.decide(view, list(workers.values()), held=held)
+                    if aged and d.worker_id is None and not d.structural_reject:
+                        held |= {w for w, v in workers.items() if could_ever_run(view, v)}
+                    first = c.execute("SELECT 1 FROM decisions WHERE job_id=? LIMIT 1", (job_id,)).fetchone() is None
+                    if d.worker_id is None and not d.structural_reject and not first:
+                        continue  # still PENDING; its first-attempt decision row already explains why
                     now = time.time()
                     c.execute(
                         """INSERT INTO decisions (job_id, ts, policy, worker_id, eligible_json, ineligible_json,
                              structural_reject, decision_us) VALUES (?,?,?,?,?,?,?,?)""",
-                        (job_id, now, M1_POLICY, chosen, json.dumps([chosen] if chosen else []),
-                         json.dumps(ineligible), int(structural), (time.perf_counter() - t0) * 1e6),
+                        (job_id, now, d.policy, d.worker_id, json.dumps(list(d.eligible)),
+                         json.dumps(d.ineligible), int(d.structural_reject), (time.perf_counter() - t0) * 1e6),
                     )
-                    if chosen:
-                        transition_job(c, job_id, JobState.ASSIGNED, "scheduler", ts=now, worker_id=chosen,
-                                       assign_ts=now, hostname=worker["hostname"])
+                    if d.worker_id:
+                        hostname = c.execute("SELECT hostname FROM workers WHERE worker_id=?",
+                                             (d.worker_id,)).fetchone()["hostname"]
+                        transition_job(c, job_id, JobState.ASSIGNED, "scheduler", ts=now, worker_id=d.worker_id,
+                                       assign_ts=now, hostname=hostname)
                         placed += 1
-                    else:
+                    elif d.structural_reject:
                         transition_job(c, job_id, JobState.REJECTED, "scheduler", ts=now)
+                    else:
+                        c.execute("UPDATE jobs SET overflow=1 WHERE job_id=?", (job_id,))
         return placed
 
-    def _pinned_decision(self, c: sqlite3.Connection, job: sqlite3.Row):
-        """M1 placement: only the named worker, with the plan §7.1 eligibility checks inline.
-        Returns (worker_row, chosen_id | None, ineligible {id: reason}, structural_reject)."""
-        wid = job["placement"]
-        w = c.execute("SELECT * FROM workers WHERE worker_id=?", (wid,)).fetchone()
-        if w is None:
-            return None, None, {wid: "unknown_worker"}, True
-        if job["type"] not in json.loads(w["supported_types_json"]):
-            return w, None, {wid: "unsupported_type"}, True
-        if job["mem_mb"] > w["mem_budget_mb"]:
-            return w, None, {wid: "mem_budget"}, True
-        used = c.execute(
-            f"SELECT COUNT(*) n, COALESCE(SUM(mem_mb),0) mem FROM jobs WHERE worker_id=? AND state IN {_in(COMMITTED)}",
-            (wid,)).fetchone()
-        telemetry = (self.rt.get(wid) or WorkerRuntime()).telemetry or {}
-        reason = None
-        if not self.is_fresh(wid):
-            reason = "stale"
-        elif w["draining"]:
-            reason = "draining"
-        elif used["n"] >= len(json.loads(w["slots_json"])):
-            reason = "no_free_slot"
-        elif used["mem"] + job["mem_mb"] > w["mem_budget_mb"]:
-            reason = "mem_budget"
-        elif telemetry.get("mem_available_mb", 0) - job["mem_mb"] < w["mem_floor_mb"]:
-            reason = "mem_floor"
-        return (w, None, {wid: reason}, False) if reason else (w, wid, {}, False)
+    def _committed_usage(self, c: sqlite3.Connection | None = None) -> dict[str, tuple[int, int]]:
+        """worker_id -> (slots used, MB committed), derived from jobs in COMMITTED states (plan §6.3)."""
+        rows = (c or self.db.conn).execute(
+            f"SELECT worker_id, COUNT(*) n, COALESCE(SUM(mem_mb),0) mem FROM jobs"
+            f" WHERE worker_id IS NOT NULL AND state IN {_in(COMMITTED)} GROUP BY worker_id").fetchall()
+        return {r["worker_id"]: (r["n"], r["mem"]) for r in rows}
+
+    def _worker_views(self, c: sqlite3.Connection) -> dict[str, WorkerView]:
+        used = self._committed_usage(c)
+        views = {}
+        for w in c.execute("SELECT * FROM workers ORDER BY worker_id").fetchall():
+            wid = w["worker_id"]
+            rt = self.rt.get(wid)
+            n, mem = used.get(wid, (0, 0))
+            views[wid] = WorkerView(
+                worker_id=wid, tier=w["tier"], fresh=self.is_fresh(wid), draining=bool(w["draining"]),
+                host_busy=bool(rt and rt.host_busy.busy),
+                supported_types=frozenset(json.loads(w["supported_types_json"])),
+                slots_total=len(json.loads(w["slots_json"])), slots_used=n, mem_budget_mb=w["mem_budget_mb"],
+                mem_committed_mb=mem, mem_available_mb=int(((rt and rt.telemetry) or {}).get("mem_available_mb", 0)),
+                mem_floor_mb=w["mem_floor_mb"])
+        return views
 
 
 def _snapshot_fields(s: JobSnapshot) -> dict:

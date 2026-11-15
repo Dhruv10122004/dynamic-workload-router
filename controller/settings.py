@@ -8,6 +8,8 @@ from typing import Mapping
 
 import psutil
 
+from scheduler.policies import POLICIES
+
 
 class SettingsError(ValueError):
     pass
@@ -26,6 +28,14 @@ class Settings:
     scheduler_interval_s: float = 1.0
     cors_origins: tuple[str, ...] = field(default=("http://localhost:5173", "http://127.0.0.1:5173"))
     controller_cpus: tuple[int, ...] | None = None
+    # Scheduler defaults (plan §6.4, §7.2, §7.3); PUT /scheduler overrides them and the
+    # active values are kept in SQLite (DECISIONS D-016).
+    policy: str = "LocalFirst"
+    host_busy_enabled: bool = True
+    host_busy_high: float = 70.0
+    host_busy_low: float = 50.0
+    aging_s: float = 30.0
+    telemetry_sample_s: float = 5.0
 
     @property
     def db_path(self) -> Path:
@@ -71,7 +81,15 @@ class Settings:
         controller_cpus = _controller_cpus(env, errors)
         port = number("DWR_PORT", 8000, int)
         stale_s = number("DWR_STALE_S", 5.0)
-        test_mode = env.get("DWR_TEST_MODE", "0").strip() in ("1", "true", "yes")
+        test_mode = _flag(env.get("DWR_TEST_MODE", "0"))
+        policy = env.get("DWR_POLICY", "LocalFirst").strip()
+        if policy not in POLICIES:
+            errors.append(f"DWR_POLICY must be one of {sorted(POLICIES)}, got {policy!r}")
+        hb_high = number("DWR_HOST_BUSY_HIGH", 70.0)
+        hb_low = number("DWR_HOST_BUSY_LOW", 50.0)
+        if not 0 <= hb_low < hb_high <= 100:
+            errors.append(f"need 0 <= DWR_HOST_BUSY_LOW < DWR_HOST_BUSY_HIGH <= 100, got {hb_low}, {hb_high}")
+        aging_s = number("DWR_AGING_S", 30.0)
         if errors:
             raise SettingsError("invalid controller configuration:\n  - " + "\n  - ".join(errors))
         return cls(
@@ -83,7 +101,16 @@ class Settings:
             test_mode=test_mode,
             stale_s=stale_s,
             controller_cpus=controller_cpus,
+            policy=policy,
+            host_busy_enabled=_flag(env.get("DWR_HOST_BUSY_ENABLED", "1")),
+            host_busy_high=hb_high,
+            host_busy_low=hb_low,
+            aging_s=aging_s,
         )
+
+
+def _flag(v: str) -> bool:
+    return v.strip().lower() in ("1", "true", "yes", "on")
 
 
 def _controller_cpus(env: Mapping[str, str], errors: list[str]) -> tuple[int, ...] | None:

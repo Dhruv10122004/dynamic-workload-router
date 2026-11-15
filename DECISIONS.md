@@ -123,3 +123,61 @@ Decision: start.ps1 launches without redirection (no handle inheritance) and pas
 `--log-file var\logs\<name>.log`; controller and agent point stdout/stderr at that file.
 httpx request logging is set to WARNING in the agent (one line per heartbeat otherwise).
 Plan §: 2 (Install), 13 M2.
+
+### D-014 (2026-11-15, M3) Structural reject: who counts, which reasons. Supersedes D-007
+Context: §6.2 rejects a job when "no registered worker supports the type, or the memory
+exceeds every worker's budget"; M1 had pinned-only placement (D-007).
+Decision: `placement=auto` is accepted. A worker "could ever run" a job if the job is not
+pinned elsewhere, the type is supported and `mem_mb <= mem_budget_mb` (staleness, load,
+draining and host-busy are transient). REJECTED when no registered worker could ever run
+it; the decision then lists each worker's *permanent* reason (`not_requested`,
+`unsupported_type`, `mem_budget`), not a transient one like `stale`. So a job pinned to a
+worker that can't hold it is rejected (as in D-007). With no worker registered at all the
+job waits. Policy restrictions (EdgeOnly/FogOnly) are not structural: such jobs wait and
+count as overflow, which is the counterfactual Cloud demand §12.1 wants.
+Alternatives rejected: rejecting on the first failing transient check. Plan §: 6.2, 7.1, 7.3.
+
+### D-015 (2026-11-15, M3) Decision rows and the overflow flag
+Context: §9 has a decisions table; §12.4 defines overflow as "no eligible worker at the
+first scheduling attempt"; D-007 wrote no row for a pass that left a job PENDING.
+Decision: a decision row is written for every placement and every reject, plus one at a
+job's first attempt when it stays PENDING (it shows why it waited). That first-attempt
+row with no worker sets `jobs.overflow=1`. Later no-op passes write nothing (no row per
+second per waiting job). "First attempt" = the job has no decision row yet.
+Alternatives rejected: a row on every pass (grows ~1/s per waiting job); a separate
+`first_attempt` column (the decisions table already records it). Plan §: 6.4, 9, 12.4.
+
+### D-016 (2026-11-15, M3) Scheduler settings: .env defaults, SQLite for the active ones
+Context: §7.3 sets the policy with `PUT /scheduler` (409 while jobs are non-terminal);
+§7.2 needs `HOST_BUSY_ENABLED/HIGH/LOW`; §6.4 needs `AGING_S`. Where they live is open.
+Decision: `.env` keys `DWR_POLICY` (LocalFirst), `DWR_HOST_BUSY_ENABLED` (1),
+`DWR_HOST_BUSY_HIGH` (70), `DWR_HOST_BUSY_LOW` (50), `DWR_AGING_S` (30) are defaults.
+`PUT /scheduler` stores the active set in a one-row `scheduler_config` table (invariant 5:
+a controller restart mid-experiment keeps the policy) and logs a `scheduler_changed`
+event. Host-busy state is always tracked and logged (`host_busy`/`host_free` events with
+`enforced`); `host_busy_enabled` only decides whether eligibility uses it, so the §12.6
+ablation still shows when stress was detected. The 10-sample window is in memory.
+Alternatives rejected: settings in memory only (lost on restart). Plan §: 6.4, 7.2, 7.3, 9.
+
+### D-017 (2026-11-15, M3) What aging does
+Context: §6.4: "any job pending longer than AGING_S is tried first, so large jobs are not
+starved". Aged jobs are the oldest, so in FIFO order they are already tried first;
+literal reordering changes nothing. Starvation happens when later small jobs keep taking
+the capacity a big job is waiting for (FIFO *with skip*).
+Decision: in a pass, once an aged job stays PENDING (not structural), the workers that
+could ever run it are held for the rest of that pass: every job behind it, aged or not,
+sees reason `reserved_for_aged` there. Aged jobs come first in FIFO order, so the oldest
+blocked job wins. (Exempting younger aged jobs was tried and failed: under sustained load
+they age too and take the capacity again.) The hold is recomputed every pass.
+Alternatives rejected: literal reordering only (no effect); blocking the whole queue
+behind an aged job (idles workers it can't use). Plan §: 6.4.
+
+### D-018 (2026-11-15, M3) stress.py on a small Fog host
+Context: §12.6 runs stress "pinned to non-slot cores, about 80% host CPU". fog-1 (pop-os)
+has 2 cores with slot core 1, so one free core gives at most 50% host CPU, below
+`HOST_BUSY_HIGH` = 70.
+Decision: `experiments/stress.py` defaults to the non-slot cores and a target host CPU%,
+computes the duty per core, and warns when the target is unreachable; `--cpus all`
+spreads the load over every core (it then also competes with the slot, which is still
+foreign load). The choice for the real experiment is the owner's (see m3 evidence).
+Alternatives rejected: silently using all cores. Plan §: 7.2, 12.6.

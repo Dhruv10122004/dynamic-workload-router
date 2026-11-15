@@ -1,9 +1,10 @@
-"""UI/admin endpoints (plan §8.2). M1 subset: health, catalog, workers."""
+"""UI/admin endpoints (plan §8.2): health, catalog, workers, scheduler, events."""
 from __future__ import annotations
 
 import psutil
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from controller.auth import require_admin
 from shared.catalog import CATALOG
@@ -12,6 +13,14 @@ public = APIRouter(tags=["health"])
 router = APIRouter(tags=["admin"], dependencies=[Depends(require_admin)])
 
 
+class SchedulerUpdate(BaseModel):
+    """PUT /scheduler body: any subset of the active settings."""
+    model_config = ConfigDict(extra="forbid")
+    policy: str | None = None
+    host_busy_enabled: bool | None = None
+    host_busy_high: float | None = None
+    host_busy_low: float | None = None
+    aging_s: float | None = None
 @public.get("/health")
 async def health(request: Request):
     """Unauthenticated so a worker host can check reachability with curl (DECISIONS D-008)."""
@@ -44,3 +53,20 @@ async def list_workers(request: Request):
 @router.get("/workers/{worker_id}")
 async def get_worker(worker_id: str, request: Request):
     return request.app.state.service.get_worker(worker_id)
+
+
+@router.get("/scheduler")
+async def get_scheduler(request: Request):
+    return request.app.state.service.get_scheduler()
+
+
+@router.put("/scheduler")
+async def put_scheduler(body: SchedulerUpdate, request: Request):
+    """409 while any job is non-terminal (plan §7.3)."""
+    return await request.app.state.service.put_scheduler(body.model_dump(exclude_none=True))
+
+
+@router.get("/events")
+async def list_events(request: Request, after: int = 0, kind: str | None = None,
+                      limit: int = Query(500, ge=1, le=5000)):
+    return request.app.state.service.list_events(after=after, limit=limit, kind=kind)

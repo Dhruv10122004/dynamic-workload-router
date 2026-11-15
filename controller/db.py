@@ -104,6 +104,12 @@ CREATE TABLE IF NOT EXISTS runs (
     name TEXT, policy TEXT, trace_hash TEXT, config_json TEXT, git_commit TEXT,
     start_ts REAL, end_ts REAL
 );
+CREATE TABLE IF NOT EXISTS scheduler_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    config_json TEXT NOT NULL,
+    updated_ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS telemetry_worker_ts ON telemetry_samples(worker_id, ts);
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL,
