@@ -89,6 +89,8 @@ def test_catalog_has_presets_tasks_and_labels(client):
     assert {"quiet", "saturate", "rush", "no_fog", "fog_busy", "both_busy", "disconnect", "cancel"} <= ids
     assert {t["id"] for t in cat["tasks"]} >= {"small_hash", "big_hash", "memory", "data", "long"}
     assert cat["labels"]["queue_title"] == "Cloud overflow queue"
+    assert {"map", "lanes", "story", "tally", "tasks"} <= set(cat["hints"])
+    assert {l["kind"] for l in cat["legend"]} >= {"running", "queue", "pick", "done", "fail", "offline"}
 
 
 def test_four_clicks_explain_edge_edge_fog_queue_then_pickup(client):
@@ -112,6 +114,15 @@ def test_four_clicks_explain_edge_edge_fog_queue_then_pickup(client):
     texts = [f["text"] for f in feed]
     assert any("edge-1 full → #3 hash 2M → fog-1" in t for t in texts), texts
     assert any("#4 hash 2M picked from the queue by edge-1" in t for t in texts), texts
+    # every line carries a kind and the worker it concerns (map/feed colours, D-030)
+    by_job = {}
+    for f in feed:
+        assert f["kind"] in {"place", "queue", "pick", "done", "fail", "cancel", "offline",
+                             "host_busy", "host_free", "worker_stale", "worker_fresh"}, f
+        by_job.setdefault(f["job_id"], []).append((f["kind"], f["worker_id"]))
+    assert ("place", "fog-1") in by_job[ids[2]]
+    assert ("queue", None) in by_job[ids[3]] and ("pick", "edge-1") in by_job[ids[3]]
+    assert ("done", "edge-1") in by_job[ids[0]]
 
 
 def test_free_play_run_opens_on_first_click_and_is_reused(client):
@@ -185,7 +196,8 @@ def test_live_lanes_slots_stats_queue_and_offline_tile(tmp_path):
         assert fog_lane["stale"] and fog_lane["slots"][0]["job"]["offline"] is True
         assert ids[1] not in [q["job_id"] for q in live["queue"]]
         assert "still running there, result pending" in " ".join(card(c, ids[1])["lines"])
-        assert any("fog-1 lost contact" in f["text"] for f in live["feed"])
+        assert any("fog-1 lost contact" in f["text"] and f["kind"] == "offline" and f["worker_id"] == "fog-1"
+                   for f in live["feed"])
         # reconnect: the result arrives and the reply hands Fog the queued job
         fog.finish(ids[1])
         reply = fog.beat()

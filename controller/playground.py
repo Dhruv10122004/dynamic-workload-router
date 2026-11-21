@@ -123,6 +123,24 @@ TASKS: list[dict] = [
 ]
 CUSTOM_LIMITS = {"load": (0.25, 3.0), "duration_s": (30, 180)}
 
+# One-line "what this means" hints under each Playground section (the frontend holds no wording).
+HINTS = {
+    "map": ("Every dot is a real job. The controller sends it to the nearest laptop with a free slot "
+            "(Edge first, then Fog); if none is free it waits in the Cloud overflow queue."),
+    "lanes": "One lane per CPU slot. Each tile is a real process: its PID, cores, CPU and memory are live.",
+    "story": "Every decision the controller made, in order. Click a line to see why.",
+    "tally": "Numbers for the current activity only.",
+    "tasks": "Click a task and watch where it lands. The card explains the controller's decision.",
+}
+LEGEND = [
+    {"kind": "running", "text": "running"},
+    {"kind": "queue", "text": "waiting in the queue"},
+    {"kind": "pick", "text": "picked from the queue"},
+    {"kind": "done", "text": "finished"},
+    {"kind": "fail", "text": "failed or stopped"},
+    {"kind": "offline", "text": "laptop offline, result pending"},
+]
+
 
 def job_label(type_: str, params: dict) -> str:
     if type_ == "cpu_hash":
@@ -199,7 +217,8 @@ class Playground:
         return {"scenarios": [{**{k: s.get(k) for k in ("id", "title", "watch", "policy", "load", "duration_s", "needs")},
                                "needs_short": "needs the stress helper on Fog" if s.get("needs") else None}
                               for s in SCENARIOS],
-                "tasks": tasks, "labels": LABELS, "custom_limits": CUSTOM_LIMITS,
+                "tasks": tasks, "labels": LABELS, "hints": HINTS, "legend": LEGEND,
+                "custom_limits": CUSTOM_LIMITS,
                 "policies": sorted(POLICY_TEXT), "mixes": ["cpu", "mem", "data", "mixed"],
                 "reference": ref.get("source", "experiments/reference.json")}
 
@@ -503,7 +522,7 @@ class Playground:
         a = self.active or self.last
         run_id = a.run_id if a else None
         workers = self._workers()
-        items: list[tuple[float, str, str | None]] = []
+        items: list[tuple[float, str, str | None, str, str | None]] = []   # ts, text, job, kind, worker
         if run_id:
             seen_first: set[str] = set()
             for d in self.db.all(
@@ -516,18 +535,18 @@ class Playground:
                 tag = self._tag(d)
                 inel = json.loads(d["ineligible_json"])
                 if d["structural_reject"]:
-                    items.append((d["ts"], f"{tag} rejected: {reasons_text(inel)}", d["job_id"]))
+                    items.append((d["ts"], f"{tag} rejected: {reasons_text(inel)}", d["job_id"], "fail", None))
                 elif d["worker_id"] and first:
                     w = workers.get(d["worker_id"], {})
                     lower = {k: v for k, v in inel.items()
                              if TIER_RANK.get(workers.get(k, {}).get("tier"), 99) < TIER_RANK.get(w.get("tier"), 99)}
                     pre = f"{' · '.join(f'{k} full' if v == 'no_free_slot' else f'{k} {REASON_TEXT.get(v, v)}' for k, v in sorted(lower.items()))} → " if lower else ""
-                    items.append((d["ts"], f"{pre}{tag} → {d['worker_id']}", d["job_id"]))
+                    items.append((d["ts"], f"{pre}{tag} → {d['worker_id']}", d["job_id"], "place", d["worker_id"]))
                 elif d["worker_id"]:
                     items.append((d["ts"], f"{tag} picked from the queue by {d['worker_id']} after "
-                                           f"{d['ts'] - d['submit_ts']:.1f} s", d["job_id"]))
+                                           f"{d['ts'] - d['submit_ts']:.1f} s", d["job_id"], "pick", d["worker_id"]))
                 else:
-                    items.append((d["ts"], f"{tag} → {LABELS['queue_title']} ({reasons_text(inel)})", d["job_id"]))
+                    items.append((d["ts"], f"{tag} → {LABELS['queue_title']} ({reasons_text(inel)})", d["job_id"], "queue", None))
             for e in self.db.all(
                     """SELECT e.*, j.type, j.params_json, j.trace_index, j.worker_id, j.exec_s, j.kill_reason,
                               j.fail_reason, j.termination_verified, j.kill_latency_ms, j.job_id
@@ -549,7 +568,8 @@ class Playground:
                     text = f"{tag} failed ({e['fail_reason']})"
                 else:
                     text = f"{tag} cancelled"
-                items.append((e["ts"], text, e["job_id"]))
+                kind = {"UNKNOWN": "offline", "SUCCEEDED": "done", "CANCELLED": "cancel"}.get(e["to_state"], "fail")
+                items.append((e["ts"], text, e["job_id"], kind, e["worker_id"]))
         for ev in self.db.all("SELECT * FROM events WHERE ts > ? AND kind IN "
                               "('host_busy','host_free','worker_stale','worker_fresh') ORDER BY id", (after_ts,)):
             det = json.loads(ev["details_json"] or "{}")
@@ -561,11 +581,12 @@ class Playground:
                 "worker_stale": f"{w} went offline (no heartbeat for {det.get('heartbeat_age_s', '?')} s)",
                 "worker_fresh": f"{w} is back online",
             }[ev["kind"]]
-            items.append((ev["ts"], text, None))
+            items.append((ev["ts"], text, None, ev["kind"], w))
         items.sort(key=lambda x: x[0])
         items = items[-limit:]
-        cursor = max([after_ts] + [t for t, _, _ in items])
-        return [{"ts": t, "text": s, "job_id": jid} for t, s, jid in items], cursor
+        cursor = max([after_ts] + [it[0] for it in items])
+        return [{"ts": t, "text": s, "job_id": jid, "kind": k, "worker_id": wid}
+                for t, s, jid, k, wid in items], cursor
 
     def _tag(self, row) -> str:
         n = (row["trace_index"] or 0) + 1

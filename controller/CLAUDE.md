@@ -25,7 +25,7 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - `playground.Playground(service)` (D-027, attached as `app.state.playground`): presets
   (`SCENARIOS`), hands-on palette (`TASKS`), `start/stop` activities (tagged runs, block
   "playground"), `submit_task`, `explain(job_id)` ("Why here?" card), `narrate(after_ts)` (story
-  feed), `live(after_ts)` (lanes per worker/slot with live stats, queue, scoreboard, compare),
+  feed; each line has `kind` and `worker_id`, D-030), `catalog()` also serves `HINTS` + `LEGEND`, `live(after_ts)` (lanes per worker/slot with live stats, queue, scoreboard, compare),
   `recover()` (closes an open playground run and cancels its jobs at startup). All
   teacher-facing wording lives here.
 - `overview.compute(conn, now, run_id=None)` (D-022) and `runs.export_rows()/to_csv()`:

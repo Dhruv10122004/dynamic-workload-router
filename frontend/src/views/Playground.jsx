@@ -1,13 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, fmtNum, usePoll } from '../api.js';
+import Icon from '../components/Icons.jsx';
+import { KIND_ICON } from '../components/kindIcon.js';
+import Sparkline from '../components/Sparkline.jsx';
 import TaskForm from '../components/TaskForm.jsx';
 import { ErrorLine, Stat } from './common.jsx';
+import NetworkMap from './NetworkMap.jsx';
 
-// Classroom playground (DECISIONS D-027). Every label, explanation and story line comes from
-// /api/v1/playground/*; this file only lays them out and animates arrivals.
+// Classroom playground (DECISIONS D-027, D-030). Every label, explanation and story line comes
+// from /api/v1/playground/*; this file only lays them out and animates real changes.
 
 const FLASH_MS = 3500;
+const TOAST_MS = 6000;
+const HISTORY_S = 120;
+const TOAST_KINDS = new Set(['host_busy', 'host_free', 'worker_stale', 'worker_fresh']);
 const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
+
+// "what this means" line under a heading; dismissal is a per-viewer convenience only
+function Hint({ id, text }) {
+  const key = `dwr.hint.${id}`;
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem(key) === '1'; } catch { return false; } });
+  if (!text || hidden) return null;
+  const hide = () => { setHidden(true); try { localStorage.setItem(key, '1'); } catch { /* private window */ } };
+  return (
+    <div className="hint-line"><Icon name="info" size={13} /><span>{text}</span>
+      <button className="btn tiny ghost" onClick={hide} aria-label="hide hint">×</button></div>
+  );
+}
+
+// integer that counts towards the real value (the final number is always the API's)
+function Num({ value }) {
+  const [shown, setShown] = useState(value);
+  const from = useRef(value);
+  useEffect(() => {
+    if (typeof value !== 'number' || typeof from.current !== 'number') { from.current = value; return undefined; }
+    const a = from.current;
+    const t0 = performance.now();
+    let id = 0;
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / 600);
+      setShown(k >= 1 ? value : Math.round(a + (value - a) * k));
+      if (k < 1) id = requestAnimationFrame(step); else from.current = value;
+    };
+    id = requestAnimationFrame(step);
+    return () => { cancelAnimationFrame(id); from.current = value; };
+  }, [value]);
+  return <>{typeof value === 'number' ? shown : value}</>;
+}
 
 function useLive() {
   const [state, setState] = useState({ data: null, feed: [], error: null });
@@ -159,10 +198,12 @@ function JobTile({ t, flash, onWhy }) {
   );
 }
 
-function WorkerCard({ w, flashes, labels, onWhy }) {
+function WorkerCard({ w, accent, focused, flashes, labels, onWhy }) {
   return (
-    <div className={`pg-card ${w.fresh ? '' : 'is-stale'} ${w.host_busy ? 'is-busy' : ''}`}>
+    <div id={`card-${w.worker_id}`}
+         className={`pg-card has-acc acc-${accent}${w.fresh ? '' : 'is-stale'} ${w.host_busy ? 'is-busy' : ''} ${focused ? 'focus' : ''}`}>
       <div className="card-head">
+        <span className="acc-dot" /><Icon name="laptop" size={16} />
         <span className="wid">{w.worker_id}</span><span className="tier">{w.tier}</span>
         <span className="badges">
           {w.fresh ? <span className="badge good">online</span> : <span className="badge bad">STALE</span>}
@@ -189,12 +230,13 @@ function WorkerCard({ w, flashes, labels, onWhy }) {
   );
 }
 
-function QueueCard({ queue, labels, board, onWhy }) {
+function QueueCard({ queue, labels, board, history, onWhy }) {
   return (
     <div className="pg-card queue">
-      <div className="card-head"><span className="wid">{labels.queue_title}</span>
+      <div className="card-head"><Icon name="queue" size={16} /><span className="wid">{labels.queue_title}</span>
         <span className="badges"><span className={`badge ${queue.length ? 'warn' : ''}`}>{queue.length} waiting</span></span></div>
       <div className="sub">{labels.queue_note}</div>
+      <Sparkline points={history} width={260} height={36} label="queue length, last 2 min" />
       {board && <div className="demand">{labels.demand_label}: <b>{fmtNum(board.overflow_demand_s, 1)} s</b>
         <span className="dim"> · {board.overflow_jobs} jobs had to wait</span></div>}
       {queue.length === 0 ? <div className="idle">{labels.queue_empty}</div> : (
@@ -225,7 +267,7 @@ function WhyCard({ jobId, onClose }) {
   );
 }
 
-function TaskPanel({ tasks, why, onLaunched, onClose, onError }) {
+function TaskPanel({ tasks, hint, why, onLaunched, onClose, onError }) {
   const [custom, setCustom] = useState(false);
   const launch = async (body) => {
     const r = await api('/playground/task', { method: 'POST', body });
@@ -236,7 +278,8 @@ function TaskPanel({ tasks, why, onLaunched, onClose, onError }) {
   };
   return (
     <div className="panel col">
-      <h3>Launch a task</h3>
+      <h3><Icon name="play" size={15} /> Launch a task</h3>
+      <Hint id="tasks" text={hint} />
       <div className="palette">
         {tasks.map((t) => (
           <button key={t.id} className="btn task" onClick={() => click(t.id)}>
@@ -257,42 +300,62 @@ function TaskPanel({ tasks, why, onLaunched, onClose, onError }) {
   );
 }
 
-function Story({ feed, onWhy }) {
+function Story({ feed, hint, accents, onWhy }) {
   const box = useRef(null);
   useEffect(() => {          // keep the newest line in view without scrolling the page
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [feed.length]);
   return (
     <div className="panel col">
-      <h3>What is happening</h3>
+      <h3><Icon name="clock" size={15} /> What is happening</h3>
+      <Hint id="story" text={hint} />
       <div className="feed" ref={box}>
         {feed.length === 0 && <div className="hint">Nothing yet: start an activity or launch a task.</div>}
-        {feed.map((f, i) => (
-          <div key={`${f.ts}-${i}`} className={`feed-line ${f.job_id ? 'link' : 'event'}`}
-               onClick={() => f.job_id && onWhy([f.job_id])}>
-            <span className="time">{clock(f.ts)}</span><span>{f.text}</span>
-          </div>
-        ))}
+        {feed.map((f, i) => {
+          const acc = f.worker_id != null && accents[f.worker_id] != null ? `has-acc acc-${accents[f.worker_id]}` : '';
+          return (
+            <div key={`${f.ts}-${i}`} className={`feed-line k-${f.kind || 'event'} ${acc} ${f.job_id ? 'link' : 'event'}`}
+                 onClick={() => f.job_id && onWhy([f.job_id])}>
+              <span className="time">{clock(f.ts)}</span>
+              <span className="feed-icon"><Icon name={KIND_ICON[f.kind] || 'info'} size={13} /></span>
+              <span>{f.text}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function Tally({ board }) {
+function Tally({ board, hint, history }) {
   return (
     <div className="panel col">
-      <h3>This activity</h3>
+      <h3><Icon name="cpu" size={15} /> This activity</h3>
+      <Hint id="tally" text={hint} />
       {!board ? <div className="hint">Numbers appear once an activity or task runs.</div> : (
-        <div className="tally-grid">
-          <Stat label="completed" value={`${board.completed}/${board.total}`} />
-          {Object.entries(board.tiers).map(([tier, v]) => <Stat key={tier} label={`done on ${tier}`} value={v.completed} />)}
-          <Stat label="offloaded" value={board.offload_pct == null ? '–' : `${board.offload_pct}%`} />
-          <Stat label="waiting now" value={board.waiting} />
-          <Stat label="longest queue" value={board.peak_queue} />
-          <Stat label="95% finished within" value={board.p95_s == null ? '–' : `${board.p95_s} s`} />
-          <Stat label="failed / killed" value={board.failed} />
-        </div>
+        <>
+          <div className="tally-grid">
+            <Stat label="completed" value={<><Num value={board.completed} />/{board.total}</>} />
+            {Object.entries(board.tiers).map(([tier, v]) => <Stat key={tier} label={`done on ${tier}`} value={<Num value={v.completed} />} />)}
+            <Stat label="offloaded" value={board.offload_pct == null ? '–' : `${board.offload_pct}%`} />
+            <Stat label="waiting now" value={<Num value={board.waiting} />} />
+            <Stat label="longest queue" value={<Num value={board.peak_queue} />} />
+            <Stat label="95% finished within" value={board.p95_s == null ? '–' : `${board.p95_s} s`} />
+            <Stat label="failed / killed" value={<Num value={board.failed} />} />
+          </div>
+          <Sparkline points={history} width={300} height={40} label="queue length, last 2 min" />
+        </>
       )}
+    </div>
+  );
+}
+
+function Toasts({ toasts }) {
+  return (
+    <div className="toasts" aria-live="polite">
+      {toasts.map((t) => (
+        <div key={t.key} className={`toast k-${t.kind}`}><Icon name={KIND_ICON[t.kind] || 'info'} size={16} /><span>{t.text}</span></div>
+      ))}
     </div>
   );
 }
@@ -324,43 +387,89 @@ export default function Playground() {
   const [why, setWhy] = useState([]);           // job ids with an open "Why here?" card, newest first
   const [msg, setMsg] = useState(null);
   const [flashes, setFlashes] = useState({});   // job_id -> true while the arrival flash shows
+  const [history, setHistory] = useState([]);   // [{t, v}] real queue lengths of the current activity
+  const [toasts, setToasts] = useState([]);
+  const [focus, setFocus] = useState(null);
   const prevQueue = useRef(new Set());
+  const prevRun = useRef(undefined);
+  const prevRunning = useRef(undefined);
+  const timers = useRef([]);
+  const later = (fn, ms) => { timers.current.push(setTimeout(fn, ms)); };
+
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
   useEffect(() => {
-    if (!data) return undefined;
+    if (!data) return;
+    // arrival flash: a job in a lane that was in the queue on the previous poll
     const inSlots = data.workers.flatMap((w) => [...w.slots.map((s) => s.job).filter(Boolean), ...w.arriving]);
     const arrived = inSlots.filter((t) => prevQueue.current.has(t.job_id)).map((t) => t.job_id);
     prevQueue.current = new Set(data.queue.map((q) => q.job_id));
-    if (!arrived.length) return undefined;
-    const on = setTimeout(() => {
-      setFlashes((f) => ({ ...f, ...Object.fromEntries(arrived.map((j) => [j, true])) }));
-    }, 0);
-    const off = setTimeout(() => {
-      setFlashes((f) => Object.fromEntries(Object.entries(f).filter(([j]) => !arrived.includes(j))));
-    }, FLASH_MS);
-    return () => { clearTimeout(on); clearTimeout(off); };
+    if (arrived.length) {
+      later(() => setFlashes((f) => ({ ...f, ...Object.fromEntries(arrived.map((j) => [j, true])) })), 0);
+      later(() => setFlashes((f) => Object.fromEntries(Object.entries(f).filter(([j]) => !arrived.includes(j)))), FLASH_MS);
+    }
+    // queue-length history, reset when the activity changes
+    const a = data.activity;
+    const run = a ? a.run_id : null;
+    const reset = run !== prevRun.current;
+    prevRun.current = run;
+    const point = { t: data.now, v: data.queue.length };
+    later(() => setHistory((h) => (reset ? [point] : [...h, point].filter((p) => p.t >= data.now - HISTORY_S))), 0);
+    // toasts: laptop events from the story feed, and an activity starting or finishing
+    const news = data.feed.filter((f) => TOAST_KINDS.has(f.kind)).map((f) => ({ kind: f.kind, text: f.text }));
+    const running = a ? a.running : null;
+    if (prevRunning.current !== undefined && a && running !== prevRunning.current) {
+      news.push(running ? { kind: 'place', text: `Started: ${a.title}` }
+        : { kind: 'done', text: `Finished: ${a.title} (${fmtNum(a.elapsed_s, 0)} s)` });
+    }
+    prevRunning.current = running;
+    if (news.length) {
+      const made = news.slice(-3).map((n, i) => ({ ...n, key: `${data.now}-${i}` }));
+      const keys = new Set(made.map((m) => m.key));
+      later(() => setToasts((t) => [...t, ...made].slice(-4)), 0);
+      later(() => setToasts((t) => t.filter((x) => !keys.has(x.key))), TOAST_MS);
+    }
+    if (timers.current.length > 400) timers.current = timers.current.slice(-200);
   }, [data]);
 
   const openWhy = (ids) => setWhy((w) => [...ids, ...w.filter((x) => !ids.includes(x))].slice(0, 4));
   const closeWhy = (id) => setWhy((w) => w.filter((x) => x !== id));
+  const focusWorker = (id) => {
+    const el = document.getElementById(`card-${id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setFocus(id);
+    later(() => setFocus((f) => (f === id ? null : f)), 1800);
+  };
 
   if (!catalog.data || !data) {
     return <section><ErrorLine error={catalog.error || error} /><div className="hint">Loading…</div></section>;
   }
+  const hints = catalog.data.hints || {};
+  const accents = Object.fromEntries(data.workers.map((w, i) => [w.worker_id, i % 4]));
   return (
     <section className="playground">
       <ErrorLine error={error || msg} />
+      <Toasts toasts={toasts} />
       <Activities catalog={catalog.data} activity={data.activity} onError={setMsg} />
+      <div className="panel map-panel">
+        <h3><Icon name="server" size={15} /> Live map</h3>
+        <Hint id="map" text={hints.map} />
+        <NetworkMap live={data} labels={data.labels} legend={catalog.data.legend || []}
+                    onWhy={(j) => openWhy([j])} onFocusWorker={focusWorker} />
+      </div>
+      <Hint id="lanes" text={hints.lanes} />
       <div className="stage">
         {data.workers.map((w) => (
-          <WorkerCard key={w.worker_id} w={w} flashes={flashes} labels={data.labels} onWhy={(j) => openWhy([j])} />
+          <WorkerCard key={w.worker_id} w={w} accent={accents[w.worker_id]} focused={focus === w.worker_id}
+                      flashes={flashes} labels={data.labels} onWhy={(j) => openWhy([j])} />
         ))}
-        <QueueCard queue={data.queue} labels={data.labels} board={data.scoreboard} onWhy={(j) => openWhy([j])} />
+        <QueueCard queue={data.queue} labels={data.labels} board={data.scoreboard} history={history}
+                   onWhy={(j) => openWhy([j])} />
       </div>
       <div className="pg-cols">
-        <TaskPanel tasks={catalog.data.tasks} why={why} onLaunched={openWhy} onClose={closeWhy} onError={setMsg} />
-        <Story feed={feed} onWhy={openWhy} />
-        <Tally board={data.scoreboard} />
+        <TaskPanel tasks={catalog.data.tasks} hint={hints.tasks} why={why} onLaunched={openWhy} onClose={closeWhy} onError={setMsg} />
+        <Story feed={feed} hint={hints.story} accents={accents} onWhy={openWhy} />
+        <Tally board={data.scoreboard} hint={hints.tally} history={history} />
       </div>
       <Compare compare={data.compare} />
     </section>

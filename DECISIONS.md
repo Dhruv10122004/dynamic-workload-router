@@ -368,3 +368,17 @@ Measured on fog-1 under load: host 52%, own 50%, foreign 2%. CPU of a job that e
 between two samples is still missed (it shows as foreign for one sample).
 Alternatives rejected: sampling more often (more load, same first-sample blind spot).
 Plan §: 5.2, 7.2.
+
+### D-030 (2026-11-22, playground) Live map animated from consecutive polls
+Context: the owner asked for a more visual, easier Playground; chose a live network map plus
+polish. The API is polled every 1 s; there is no push channel.
+Decision: `frontend/src/views/liveDiff.js` diffs two consecutive `/playground/live` payloads
+into moves (new job → controller to laptop or queue; queue → laptop = picked; newly finished
+→ coloured at its laptop); the map animates only those. A job that starts and ends between
+two polls appears via `finished` (flies already coloured). Narration lines gain `kind` and
+`worker_id`; hints and legend wording come from the API (AC-5.1). Each laptop's accent colour
+is its position in the API's worker order (tier_rank), never its tier name. The queue
+sparkline plots polled values only, per activity.
+Alternatives rejected: a server event stream (new transport for a view-only feature); a chart
+or graph library (offline demo, no new dependencies).
+Plan §: 10 (dashboard), M7 demo.

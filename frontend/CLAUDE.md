@@ -9,6 +9,9 @@ what the API returns.
   per laptop/slot with real PID, cores, CPU%, RAM, the Cloud overflow queue, hands-on task
   palette + custom builder, "Why here?" cards, story feed, scoreboard and comparison; reads
   `/playground/*` (D-027). Arrival flash = a job that was in the queue on the previous poll.
+- `views/NetworkMap.jsx`: live SVG map; dots animate the moves `views/liveDiff.js`
+  (`diffLive(prev, next)`, pure) finds between two polls (D-030). `components/Icons.jsx`
+  (`<Icon name>`), `kindIcon.js` (narration kind → icon), `Sparkline.jsx` (polled values only).
 - `components/TaskForm.jsx`: catalog-driven job form shared by Submit and the Playground.
 - Views (hash routes): `#Overview` (GET /overview, /events), `#Workers` (GET /workers;
   drain/enable), `#Jobs` (GET /jobs?order=desc; cancel), `#Decisions` (GET /decisions),
@@ -31,6 +34,9 @@ what the API returns.
 - CSS class names are global: never reuse a base name (`.bar`, `.panel`, …) for a new meaning
   (a `.bar` progress bar once collapsed the header on every tab). Buttons: `.btn` +
   `primary | danger | ghost | tiny | wide`. Check layout at 1366 px and 1920 px.
+- Per-laptop accent = `has-acc acc-<index in API worker order>` (sets `--acc`), never by tier.
+- Animate only real changes between polls; hints/legend text come from the API.
+- Inline SVG without `xmlns` (the AC-5.1 scan rejects any `http` URL in `src/`).
 - `dist/` and `node_modules/` are not committed.
 
 ## Test

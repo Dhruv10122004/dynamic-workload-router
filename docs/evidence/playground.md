@@ -66,3 +66,13 @@ panel, even three-column lower area, 2×4 activity numbers, one button style, fr
 after an activity ends. Checked at 1366 px and 1920 px (`img/playground-layout-1366.png`).
 The Workers view also exposed D-029: own (job) CPU read ~0 and was counted as foreign; fixed
 (fog-1 under load: host 52%, own 50%, foreign 2%).
+
+## Live map and polish (2026-11-22, D-030)
+Live network map above the lanes: controller, one node per laptop (CPU ring, one pill per
+slot with the job number), the overflow queue (one dot per waiting job); dots fly for each
+real move between two polls. Per-laptop accent colours, icons, API-served hints and legend,
+queue sparkline, toasts for busy/offline events. Checked during "Edge saturates" on both
+laptops: `img/playground-map-1366.png` (queue 9, edge-1 2 slots busy, fog-1 1 slot busy),
+`img/playground-map-present.png` (1920 px presenter mode, queue 18). Tests: playground
+feed `kind`/`worker_id` and hints/legend; AC-5.1 scan passes. The offline (dashed red)
+link was not re-run with a Wi-Fi drop on hardware; it uses the same `fresh` flag as the cards.
