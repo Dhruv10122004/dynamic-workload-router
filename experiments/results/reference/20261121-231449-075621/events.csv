@@ -1,0 +1,3 @@
+id,ts,kind,worker_id,job_id,details_json
+58,1795283089.5279176,run_started,,,"{""run_id"": ""20261121-231449-075621"", ""name"": ""reference-x8"", ""policy"": ""EdgeOnly""}"
+59,1795283146.9114308,run_finished,,,"{""run_id"": ""20261121-231449-075621""}"

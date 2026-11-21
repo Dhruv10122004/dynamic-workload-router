@@ -1,0 +1,61 @@
+{
+  "edge_worker": "edge-1",
+  "edge_slots": 2,
+  "edge_cores": [
+    [
+      2
+    ],
+    [
+      4
+    ]
+  ],
+  "hostname": "LAPTOP-L5C3UP7P",
+  "mean_exec_s": {
+    "cpu_hash:{\"iterations\":1000000}": 1.7048758999929607,
+    "cpu_hash:{\"iterations\":2000000}": 3.2601599666716843,
+    "cpu_hash:{\"iterations\":500000}": 0.8265665333310608,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 0.0945343999871208,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 0.03822880000613319,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 0.055880433336521186,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 1.0410265666723717,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 2.085819566670883,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 3.16004120001647
+  },
+  "stdev_exec_s": {
+    "cpu_hash:{\"iterations\":1000000}": 0.19073020164901527,
+    "cpu_hash:{\"iterations\":2000000}": 0.2047652367592255,
+    "cpu_hash:{\"iterations\":500000}": 0.03167961914791938,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 0.002738631133144344,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 0.006054815622344968,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 0.0011422981953715663,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 0.010730169859952558,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 0.011127061189387659,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 0.017325392139565025
+  },
+  "mean_service_s": {
+    "cpu_hash:{\"iterations\":1000000}": 2.6742453575134277,
+    "cpu_hash:{\"iterations\":2000000}": 4.038625001907349,
+    "cpu_hash:{\"iterations\":500000}": 1.7756421566009521,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 1.1694498856862385,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 0.8283023834228516,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 1.0511572360992432,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 1.7749972343444824,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 2.9042088985443115,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 3.889843781789144
+  },
+  "n": {
+    "cpu_hash:{\"iterations\":1000000}": 3,
+    "cpu_hash:{\"iterations\":2000000}": 3,
+    "cpu_hash:{\"iterations\":500000}": 3,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 3,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 3,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 3,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 3,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 3,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 3
+  },
+  "run_id": "20261121-110634-394ba1",
+  "run_dir": "C:\\Users\\JAGANN~1\\AppData\\Local\\Temp\\claude\\66a7a9368976bb78\\762d8638-d912-40b6-82a1-6984e9da293e\\scratchpad\\m6\\results\\reference\\20261121-110634-394ba1",
+  "git_commit": "3d495110637e894829965154985b1caef6b9f0ad-dirty",
+  "measured_at": "2026-11-21 11:07:05"
+}

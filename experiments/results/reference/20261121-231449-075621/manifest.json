@@ -1,0 +1,152 @@
+{
+  "run": {
+    "run_id": "20261121-231449-075621",
+    "name": "reference-x8",
+    "policy": "EdgeOnly",
+    "trace_hash": "3999689b19defaf469fe0bbf3ccffa971f21d339392df86c8f4087b15c9f7ef5",
+    "git_commit": "7f0f1917e1796c645285a7056662035b4a2e8b00-dirty",
+    "start_ts": 1795283089.5279176,
+    "end_ts": 1795283146.9114308,
+    "config": {
+      "block": "reference",
+      "trace": "D:\\PROJECTS\\dynamic-workload-router\\experiments\\results\\reference\\traces\\reference-x8.csv",
+      "trace_meta": {
+        "kind": "reference",
+        "reps": 8,
+        "duration_s": 0.0,
+        "sha256": "3999689b19defaf469fe0bbf3ccffa971f21d339392df86c8f4087b15c9f7ef5",
+        "jobs": 72
+      },
+      "drain_s": 600.0,
+      "idle_rule": {
+        "cpu_below_pct": 25.0,
+        "quiet_s": 15.0
+      },
+      "network": "hotspot",
+      "require": [
+        "edge-1"
+      ],
+      "workers": [
+        {
+          "worker_id": "edge-1",
+          "tier": "edge",
+          "hostname": "LAPTOP-L5C3UP7P",
+          "os": "Windows",
+          "os_version": "10.0.26200",
+          "python": "3.11.9",
+          "cpu_logical": 12,
+          "mem_total_mb": 16013,
+          "slots": [
+            {
+              "slot": 0,
+              "cpus": [
+                2
+              ]
+            },
+            {
+              "slot": 1,
+              "cpus": [
+                4
+              ]
+            }
+          ],
+          "slots_total": 2,
+          "mem_budget_mb": 1536,
+          "mem_floor_mb": 512,
+          "supported_types": [
+            "cpu_hash",
+            "data_digest",
+            "mem_touch"
+          ],
+          "capabilities": {
+            "affinity": true,
+            "cpu_quota": "not_enforced",
+            "rss_watchdog": true,
+            "memory_hard_limit": "not_enforced"
+          },
+          "agent_version": "1.0.0-m7",
+          "fresh": true,
+          "draining": false
+        },
+        {
+          "worker_id": "fog-1",
+          "tier": "fog",
+          "hostname": "pop-os",
+          "os": "Linux",
+          "os_version": "6.12.10-76061203-generic",
+          "python": "3.10.12",
+          "cpu_logical": 2,
+          "mem_total_mb": 3738,
+          "slots": [
+            {
+              "slot": 0,
+              "cpus": [
+                1
+              ]
+            }
+          ],
+          "slots_total": 1,
+          "mem_budget_mb": 1536,
+          "mem_floor_mb": 512,
+          "supported_types": [
+            "cpu_hash",
+            "data_digest",
+            "mem_touch"
+          ],
+          "capabilities": {
+            "affinity": true,
+            "cpu_quota": "not_enforced",
+            "rss_watchdog": true,
+            "memory_hard_limit": "not_enforced"
+          },
+          "agent_version": "1.0.0-m7",
+          "fresh": true,
+          "draining": false
+        }
+      ],
+      "harness_host": "LAPTOP-L5C3UP7P",
+      "harness_power": {
+        "battery": true,
+        "plugged_in": true,
+        "percent": 97
+      },
+      "scheduler": {
+        "policy": "EdgeOnly",
+        "host_busy_enabled": false,
+        "host_busy_high": 70.0,
+        "host_busy_low": 50.0,
+        "aging_s": 30.0,
+        "queue_timeout_s": 900.0
+      }
+    }
+  },
+  "trace": {
+    "path": "D:\\PROJECTS\\dynamic-workload-router\\experiments\\results\\reference\\traces\\reference-x8.csv",
+    "sha256": "3999689b19defaf469fe0bbf3ccffa971f21d339392df86c8f4087b15c9f7ef5",
+    "jobs": 72,
+    "duration_s": 0.0,
+    "kind": "reference",
+    "reps": 8
+  },
+  "strategy": {
+    "policy": "EdgeOnly",
+    "host_busy_enabled": false
+  },
+  "run_length_s": 600.0,
+  "wall_start": 1795283089.5295806,
+  "submitted": 72,
+  "submit_errors": 0,
+  "submit_lag_ms": {
+    "p50": 187.0000000053551,
+    "p99": 390.00000001396984,
+    "max": 390.00000001396984
+  },
+  "cancelled_at_drain": [],
+  "median_rtt_ms": {
+    "edge-1": 17.095699993660673,
+    "fog-1": 64.6259730001475
+  },
+  "network": "hotspot",
+  "git_commit": "7f0f1917e1796c645285a7056662035b4a2e8b00-dirty",
+  "reference": null
+}

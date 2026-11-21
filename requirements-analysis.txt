@@ -1,0 +1,3 @@
+# Analysis only (experiments/analyze.py), on the controller laptop. Workers do not need it.
+-r requirements.txt
+matplotlib==3.10.8
