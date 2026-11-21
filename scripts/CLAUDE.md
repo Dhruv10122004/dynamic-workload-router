@@ -18,6 +18,9 @@ Install/run scripts for the two machines (plan §2 Install, §16.1). The mid-ter
 - `dwr-common.ps1`: helpers dot-sourced by the three scripts.
 - `setup.sh` (Linux Fog worker): Python 3.10–3.12, `.venv` (rebuilt if it has no pip), requirements, `.env` prompts
   (mode 600), curls `/api/v1/health`.
+- `agent.sh start|stop|restart|status` (Linux): the agent as a detached background process
+  (safe over ssh), log `var/logs/agent.log`; found by its working directory, so a hand-started
+  agent is recognised; stop kills leftover job processes of this checkout and verifies none remain.
 - Coming: systemd unit `deploy/systemd/dwr-worker.service`, `doctor.py`.
 
 ## Rules
@@ -30,5 +33,5 @@ Install/run scripts for the two machines (plan §2 Install, §16.1). The mid-ter
 
 ## Test
 Parse: `[System.Management.Automation.Language.Parser]::ParseFile(...)` on each .ps1;
-`bash -n scripts/setup.sh`. Real run: `.\scripts\start.ps1 -Sim` then `.\scripts\stop.ps1`
+`bash -n scripts/setup.sh scripts/agent.sh`. Real run: `.\scripts\start.ps1 -Sim` then `.\scripts\stop.ps1`
 (evidence in docs/evidence/m2.md).
