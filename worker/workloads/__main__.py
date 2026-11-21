@@ -15,7 +15,7 @@ from pathlib import Path
 
 import psutil
 
-from shared.schemas import JobValidationError, validate_job
+from shared.catalog import check_params
 from worker.workloads import IMPLEMENTED
 from worker.workloads.common import (
     EXIT_CANCELLED, EXIT_ERROR, EXIT_INVALID, EXIT_OK, Cancelled, JobContext, peak_rss_mb, pin, write_result,
@@ -34,9 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cpus = [int(c) for c in args.cpus.split(",") if c.strip()]
         if args.type not in IMPLEMENTED:
-            raise JobValidationError([{"loc": ("type",), "msg": f"not implemented on this worker: {args.type}"}])
-        params = validate_job(args.type, json.loads(args.params), test_mode=True).params
-    except (ValueError, JobValidationError) as e:
+            raise ValueError(f"not implemented on this worker: {args.type}")
+        # Same rules as shared.schemas.validate_job, without importing pydantic (~0.5 s per job, D-026).
+        params = check_params(args.type, json.loads(args.params))
+    except ValueError as e:
         print(f"invalid parameters: {e}", file=sys.stderr)
         return EXIT_INVALID
 

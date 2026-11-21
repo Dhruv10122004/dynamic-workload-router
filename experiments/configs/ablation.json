@@ -1,0 +1,18 @@
+{
+  "block": "ablation",
+  "reference": "experiments/reference.json",
+  "mix": "mixed",
+  "arrival": "poisson",
+  "loads": [1.5],
+  "reps": 3,
+  "base_seed": 5000,
+  "duration_s": 240,
+  "drain_s": 120,
+  "queue_timeout_s": 300,
+  "require": ["edge-1", "fog-1"],
+  "network": "set-me: LAN | hotspot | tailscale-direct | tailscale-relay",
+  "strategies": [
+    {"name": "LocalFirst-hostbusy-off", "policy": "LocalFirst", "host_busy": false, "stress": {"at_s": 60, "for_s": 120}},
+    {"name": "LocalFirst-hostbusy-on", "policy": "LocalFirst", "host_busy": true, "stress": {"at_s": 60, "for_s": 120}}
+  ]
+}

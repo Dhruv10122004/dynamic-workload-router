@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
-from controller import overview
+from controller import overview, runs
 from controller.blobs import BlobStore
 from controller.db import Database, add_event, insert_job_event, transition_job
 from controller.settings import Settings
@@ -402,6 +402,10 @@ class ControllerService:
                     log.info("worker %s is %s (foreign CPU mean %.1f%%)", worker_id,
                              "host_busy" if busy else "free again", rt.host_busy.mean)
                 changed = self._apply_snapshot(c, worker_id, hb.jobs, now) if apply else False
+            if changed or not was_fresh:
+                # A slot just freed (or the worker is back): place now, so this very reply
+                # carries the next assignment instead of the next heartbeat ~1 s later.
+                self._schedule_locked()
             reply = self._build_reply(worker_id, worker, hb)
         if changed or freed or not was_fresh:
             self.kick()
@@ -498,6 +502,10 @@ class ControllerService:
             v = validate_job(sub.type, sub.params, sub.timeout_s, test_mode=self.settings.test_mode)
         except JobValidationError as e:
             raise Invalid(e.errors) from None
+        if sub.run_id is not None:
+            r = self.db.one("SELECT end_ts FROM runs WHERE run_id=?", (sub.run_id,))
+            if r is None or r["end_ts"] is not None:
+                raise Invalid([{"loc": ["run_id"], "msg": f"run {sub.run_id!r} is not an open run"}])
         if sub.placement != "auto" and self.db.one("SELECT 1 FROM workers WHERE worker_id=?", (sub.placement,)) is None:
             raise Invalid([{"loc": ["placement"], "msg": f"unknown worker {sub.placement!r}"}])
         input_bytes = v.params.get("input_bytes", 0)
@@ -572,6 +580,67 @@ class ControllerService:
     def overview(self, run_id: str | None = None) -> dict:
         return {**overview.compute(self.db.conn, time.time(), run_id), "scheduler": asdict(self.sched)}
 
+    # ------------------------------------------------------------ runs (plan §8.2, §12)
+    async def create_run(self, *, name: str, trace_hash: str | None, config: dict,
+                         git_commit: str | None) -> dict:
+        """Start a tagged run. 409 while any job is non-terminal or another run is open, so a
+        run never inherits load from the previous one (plan §12.3). The policy recorded is
+        the controller's active one, not what the harness believes it set."""
+        now = time.time()
+        async with self.db.lock:
+            busy = self.db.one(f"SELECT COUNT(*) n FROM jobs WHERE state IN {_in(NON_TERMINAL)}")["n"]
+            if busy:
+                raise Conflict(f"{busy} job(s) are not terminal; a run starts only when the system is idle")
+            open_run = self.db.one("SELECT run_id FROM runs WHERE end_ts IS NULL")
+            if open_run:
+                raise Conflict(f"run {open_run['run_id']!r} is still open; finish it first")
+            run_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + "-" + uuid.uuid4().hex[:6]
+            cfg = {**config, "scheduler": asdict(self.sched)}
+            with self.db.tx() as c:
+                c.execute("""INSERT INTO runs (run_id, name, policy, trace_hash, config_json, git_commit, start_ts)
+                             VALUES (?,?,?,?,?,?,?)""",
+                          (run_id, name, self.sched.policy, trace_hash, json.dumps(cfg), git_commit, now))
+                add_event(c, "run_started", ts=now, run_id=run_id, name=name, policy=self.sched.policy)
+        return self.get_run(run_id)
+
+    async def finish_run(self, run_id: str) -> dict:
+        now = time.time()
+        async with self.db.lock:
+            row = self.db.one("SELECT end_ts FROM runs WHERE run_id=?", (run_id,))
+            if row is None:
+                raise NotFound(f"run {run_id!r} not found")
+            if row["end_ts"] is None:
+                with self.db.tx() as c:
+                    c.execute("UPDATE runs SET end_ts=? WHERE run_id=?", (now, run_id))
+                    add_event(c, "run_finished", ts=now, run_id=run_id)
+        return self.get_run(run_id)
+
+    def get_run(self, run_id: str) -> dict:
+        row = self.db.one("SELECT * FROM runs WHERE run_id=?", (run_id,))
+        if row is None:
+            raise NotFound(f"run {run_id!r} not found")
+        return runs.run_to_json(row)
+
+    def list_runs(self, *, active: bool = False, limit: int = 100) -> list[dict]:
+        sql = "SELECT * FROM runs" + (" WHERE end_ts IS NULL" if active else "") + " ORDER BY start_ts DESC LIMIT ?"
+        now = time.time()
+        out = []
+        for r in self.db.all(sql, (limit,)):
+            d = runs.run_to_json(r)
+            # Controller-clock age of an open run: lets a remote helper (stress.py --follow-runs)
+            # time itself against the run without synchronised clocks.
+            d["elapsed_s"] = now - d["start_ts"] if d["end_ts"] is None else None
+            out.append(d)
+        return out
+
+    def export_run(self, run_id: str, table: str) -> str:
+        row = self.db.one("SELECT * FROM runs WHERE run_id=?", (run_id,))
+        if row is None:
+            raise NotFound(f"run {run_id!r} not found")
+        if table not in runs.EXPORT_TABLES:
+            raise Invalid([{"loc": ["table"], "msg": f"one of {list(runs.EXPORT_TABLES)}"}])
+        return runs.to_csv(*runs.export_rows(self.db.conn, row, table, time.time()))
+
     # ------------------------------------------------------------ workers
     def list_workers(self) -> list[dict]:
         return [self.worker_to_json(r) for r in self.db.all("SELECT * FROM workers ORDER BY worker_id")]
@@ -611,45 +680,50 @@ class ControllerService:
 
         Decision rows (DECISIONS D-015): one for every placement or reject, plus one at a job's
         first attempt when it stays PENDING; that job gets overflow=1 (plan §12.4)."""
-        placed = 0
         async with self.db.lock:
-            aged_before = time.time() - self.sched.aging_s
-            pending = self.db.all(
-                "SELECT job_id FROM jobs WHERE state='PENDING' ORDER BY (submit_ts >= ?), submit_ts, rowid",
-                (aged_before,))
-            held: frozenset[str] = frozenset()  # workers reserved for an aged job (DECISIONS D-017)
-            for (job_id,) in pending:
-                t0 = time.perf_counter()
-                with self.db.tx() as c:
-                    job = c.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
-                    if job is None or job["state"] != JobState.PENDING.value:
-                        continue
-                    workers = self._worker_views(c)
-                    view = JobView(job_id, job["type"], job["mem_mb"], job["placement"])
-                    aged = job["submit_ts"] < aged_before
-                    d = self.policy.decide(view, list(workers.values()), held=held)
-                    if aged and d.worker_id is None and not d.structural_reject:
-                        held |= {w for w, v in workers.items() if could_ever_run(view, v)}
-                    first = c.execute("SELECT 1 FROM decisions WHERE job_id=? LIMIT 1", (job_id,)).fetchone() is None
-                    if d.worker_id is None and not d.structural_reject and not first:
-                        continue  # still PENDING; its first-attempt decision row already explains why
-                    now = time.time()
-                    c.execute(
-                        """INSERT INTO decisions (job_id, ts, policy, worker_id, eligible_json, ineligible_json,
-                             structural_reject, decision_us) VALUES (?,?,?,?,?,?,?,?)""",
-                        (job_id, now, d.policy, d.worker_id, json.dumps(list(d.eligible)),
-                         json.dumps(d.ineligible), int(d.structural_reject), (time.perf_counter() - t0) * 1e6),
-                    )
-                    if d.worker_id:
-                        hostname = c.execute("SELECT hostname FROM workers WHERE worker_id=?",
-                                             (d.worker_id,)).fetchone()["hostname"]
-                        transition_job(c, job_id, JobState.ASSIGNED, "scheduler", ts=now, worker_id=d.worker_id,
-                                       assign_ts=now, hostname=hostname)
-                        placed += 1
-                    elif d.structural_reject:
-                        transition_job(c, job_id, JobState.REJECTED, "scheduler", ts=now)
-                    else:
-                        c.execute("UPDATE jobs SET overflow=1 WHERE job_id=?", (job_id,))
+            return self._schedule_locked()
+
+    def _schedule_locked(self) -> int:
+        """The pass itself; the caller holds db.lock (schedule_pass, or a heartbeat that just
+        freed a slot, so its reply already carries the next assignment: DECISIONS D-026)."""
+        placed = 0
+        aged_before = time.time() - self.sched.aging_s
+        pending = self.db.all(
+            "SELECT job_id FROM jobs WHERE state='PENDING' ORDER BY (submit_ts >= ?), submit_ts, rowid",
+            (aged_before,))
+        held: frozenset[str] = frozenset()  # workers reserved for an aged job (DECISIONS D-017)
+        for (job_id,) in pending:
+            t0 = time.perf_counter()
+            with self.db.tx() as c:
+                job = c.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+                if job is None or job["state"] != JobState.PENDING.value:
+                    continue
+                workers = self._worker_views(c)
+                view = JobView(job_id, job["type"], job["mem_mb"], job["placement"])
+                aged = job["submit_ts"] < aged_before
+                d = self.policy.decide(view, list(workers.values()), held=held)
+                if aged and d.worker_id is None and not d.structural_reject:
+                    held |= {w for w, v in workers.items() if could_ever_run(view, v)}
+                first = c.execute("SELECT 1 FROM decisions WHERE job_id=? LIMIT 1", (job_id,)).fetchone() is None
+                if d.worker_id is None and not d.structural_reject and not first:
+                    continue  # still PENDING; its first-attempt decision row already explains why
+                now = time.time()
+                c.execute(
+                    """INSERT INTO decisions (job_id, ts, policy, worker_id, eligible_json, ineligible_json,
+                         structural_reject, decision_us) VALUES (?,?,?,?,?,?,?,?)""",
+                    (job_id, now, d.policy, d.worker_id, json.dumps(list(d.eligible)),
+                     json.dumps(d.ineligible), int(d.structural_reject), (time.perf_counter() - t0) * 1e6),
+                )
+                if d.worker_id:
+                    hostname = c.execute("SELECT hostname FROM workers WHERE worker_id=?",
+                                         (d.worker_id,)).fetchone()["hostname"]
+                    transition_job(c, job_id, JobState.ASSIGNED, "scheduler", ts=now, worker_id=d.worker_id,
+                                   assign_ts=now, hostname=hostname)
+                    placed += 1
+                elif d.structural_reject:
+                    transition_job(c, job_id, JobState.REJECTED, "scheduler", ts=now)
+                else:
+                    c.execute("UPDATE jobs SET overflow=1 WHERE job_id=?", (job_id,))
         return placed
 
     def _committed_usage(self, c: sqlite3.Connection | None = None) -> dict[str, tuple[int, int]]:

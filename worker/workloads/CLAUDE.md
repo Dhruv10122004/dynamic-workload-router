@@ -20,7 +20,8 @@ The job programs themselves; each job runs as its own subprocess. Implements pla
 - Pin to `--cpus` before any timed work.
 - Check the `cancel` sentinel at least every 100 ms, including while sleeping/holding.
 - Single-threaded, pure Python: no numpy, no thread pools (one slot = one core).
-- Re-validate params with shared.schemas (exit 2 on failure).
+- Re-validate params with `shared.catalog.check_params` (exit 2 on failure). Never import
+  pydantic or shared.schemas here: it costs ~0.5 s of start-up per job (D-026).
 - Time with `perf_counter` (incl. sleep deadlines): Windows `monotonic` ticks every ~15.6 ms.
 - A new type needs: module with `run(ctx, params) -> dict`, entry in `IMPLEMENTED`,
   catalog entry in shared/catalog.py, tests.

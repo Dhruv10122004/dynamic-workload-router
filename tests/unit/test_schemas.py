@@ -72,3 +72,33 @@ def test_env_file(tmp_path, monkeypatch):
     assert env["DWR_A"] == "1" and env["DWR_B"] == "from-env" and env["OTHER"] == "z"
     with pytest.raises(FileNotFoundError):
         load_env(tmp_path / "missing")
+
+
+def test_check_params_agrees_with_validate_job():
+    """The job process validates with shared.catalog.check_params (no pydantic, D-026); it must
+    accept and reject exactly what validate_job does, with the same normalised result."""
+    import random
+
+    from shared.catalog import check_params
+    rng = random.Random(42)
+    values = [None, True, False, "5", 0, 1, -1, 15, 16, 20_000, 5_000_000, 5_000_001, 2.5, 30.0, 30.5, 1e9,
+              float("nan"), 64.0, [], {}]
+    checked = 0
+    for type_, wt in CATALOG.items():
+        names = [s.name for s in wt.params] + ["bogus"]
+        for _ in range(1500):
+            params = {n: rng.choice(values) if rng.random() < 0.6 else
+                      (rng.randint(int(s.min), int(s.max)) if (s := next((x for x in wt.params if x.name == n), None))
+                       and s.kind is int else rng.uniform(0, 31))
+                      for n in rng.sample(names, rng.randint(0, len(names)))}
+            try:
+                expected = validate_job(type_, params, test_mode=True).params
+            except JobValidationError:
+                expected = None
+            try:
+                got = check_params(type_, params)
+            except ValueError:
+                got = None
+            assert got == expected, (type_, params, got, expected)
+            checked += 1
+    assert checked == 4500

@@ -1,28 +1,40 @@
 # experiments/
 
-Tools for the hardware ACs and for evaluation (plan §12). M3 adds load and audit tools.
-Coming in M6: `gen_trace.py`, `replay.py`, `analyze.py`, `configs/*.json`.
+The evaluation harness (plan §12, M6) plus the M3 load/audit tools. It runs on the
+controller laptop (stress.py runs on the worker being stressed).
 
 ## Public interface
-All are run from the repo root with the venv python: `python -m experiments.<name> --help`.
-- `stress.py`: foreign CPU load for the host-busy experiment (§12.6, AC-3.4).
-  `--target-host-pct 80 --duration 120 [--cpus all|0,2] [--delay 60]`. Default cores: those
-  not in `DWR_SLOT_CPUS` (.env); warns when they can't reach the target (D-018). Runs on
-  the worker host; Ctrl+C stops it and its children.
-- `burst.py`: submits `--n` jobs at once (`--mix cpu|mem|mixed`, placement auto) to
-  `--url`, waits for them, and prints placement per worker, overflow count and ineligible
-  reasons (AC-3.2). Admin token from `--admin-token` or `DWR_ADMIN_TOKEN`.
-- `audit.py`: `audit(db_path, run_id=None) -> {worker_id: WorkerPeak}`. Replays
-  job_events in commit order and reports peak slots/memory and any overbooking (AC-3.3).
-  CLI `--db var/controller/dwr.db [--run-id]`; exit code 1 on a violation. Opens the DB
-  read-only, so it is safe while the controller runs.
+Run from the repo root with the venv python: `python -m experiments.<name> --help`.
+- `reference.py [--reps 8]`: reference timing run. Every job size (gen_trace.VARIANTS)
+  N times under EdgeOnly → `experiments/reference.json` (per size on Edge: mean exec_s and
+  mean service_s = assign→end slot time; Edge slots; power state). Only defines load levels.
+- `gen_trace.py --load L --seed S --out t.csv [--mix mixed --arrival poisson|bursts]
+  [--capacity-basis service|exec_s]`: seeded trace CSV + `.meta.json` (sha256).
+  Rate = L × Edge slots / E[slot time] (AC-6.1; basis D-026, default service).
+- `replay.py --trace t.csv --policy P [--host-busy on|off] --block B`: one tagged run:
+  idle wait → PUT /scheduler → POST /runs → open-loop submit → drain → cancel leftovers →
+  finish → `results/<block>/<run_id>/{manifest.json,jobs,decisions,telemetry,events.csv}`.
+  `run_trace(c, ...)` is the library form.
+- `sweep.py configs/<block>.json [--dry-run]`: whole block, unattended and resumable
+  (`index.json`); same trace per (load, rep) for every strategy; strategy order rotates.
+  Configs: `sweep.json` (3 strategies × 5 loads × 3 reps), `ablation.json` (host-busy off/on
+  with stress), `pilot.json`.
+- `analyze.py results/<block>`: from the run directories alone → `analysis/runs.csv`,
+  `summary.csv`, `ablation.csv`, `report.md`, PNG plots (AC-6.2; definitions in D-025).
+- `stress.py`: foreign CPU load (§12.6). `--follow-runs --block ablation --admin-token T`
+  stresses each run that asks for it, timed by the controller's `elapsed_s` (D-024).
+- `burst.py`, `audit.py` (M3): burst placement report; overbooking replay of job_events.
+- `common.py`: `client()`, `git_commit()`, `wait_idle()`, `workers_snapshot()`, `percentile()`.
 
 ## Rules
-- Talk to the controller only through its HTTP API. The exception is audit.py, which
-  reads SQLite read-only.
+- Talk to the controller only through its HTTP API (audit.py reads SQLite read-only).
 - Never write to the controller DB. Never import controller internals.
-- Seeds and inputs must be reproducible. Every result records its config (plan §12.3).
+- Reproducible: traces come only from (reference, load, mix, arrival, duration, seed);
+  every run records git commit, config, trace hash, workers/slots, network, median RTT.
+- analyze.py reads nothing but the results directory.
+- Plotting needs `requirements-analysis.txt` (matplotlib), on the controller laptop only.
+- Measure the reference and run the blocks in the same power state (mains power); every
+  run records `harness_power` and analyze.py prints it.
 
 ## Test
-`.\.venv\Scripts\python -m pytest tests/integration/test_scheduling.py` (uses `audit`);
-the scripts themselves are exercised in the m3 evidence runs.
+`.\.venv\Scripts\python -m pytest tests/unit/test_experiments.py tests/integration/test_runs_api.py tests/integration/test_scheduling.py`

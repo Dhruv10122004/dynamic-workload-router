@@ -233,3 +233,17 @@ def test_aged_job_is_not_starved_by_later_small_jobs(client):
     edge.finish(small)
     settle(client, [edge], lambda: job(client, big)["state"] == "ASSIGNED")
     assert job(client, later)["state"] == "PENDING"         # 1048 + 48 > 1064 until big ends
+
+
+def test_reply_that_frees_a_slot_carries_the_next_assignment(client):
+    """D-026: the heartbeat reporting a terminal job gets the next job in its own reply,
+    not one heartbeat later."""
+    edge = Worker(client, "edge-1", "edge", slots=1)
+    edge.beat()
+    first, second = submit(client), submit(client)
+    settle(client, [edge], lambda: job(client, first)["state"] == "RUNNING")
+    assert job(client, second)["state"] == "PENDING"
+    edge.finish(first)
+    reply = edge.beat()                       # reports first as SUCCEEDED
+    assert [a["job_id"] for a in reply["assignments"]] == [second]
+    assert job(client, first)["state"] == "SUCCEEDED" and job(client, second)["state"] == "ASSIGNED"

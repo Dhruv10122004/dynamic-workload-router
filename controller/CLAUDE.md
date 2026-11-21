@@ -4,47 +4,32 @@ The only process that listens (FastAPI, /api/v1). Owns the SQLite source of trut
 handles registration and heartbeats, accepts jobs, places them. Implements plan §6, §8, §9.
 
 ## Public interface
-- Serves the built dashboard (`frontend/dist`, `Settings.frontend_dist`) at `/` on the
-  same origin, mounted after the API so `/api/v1` always wins.
 - Run: `python -m controller [--env-file PATH|-] [--log-file PATH]`; binds every
   `DWR_BIND_HOSTS` address; pins itself to `DWR_CONTROLLER_CPUS` (default: every core not
-  in `DWR_SLOT_CPUS`), reported as `controller_cpus` by /health.
-- `blobs.BlobStore(root).ensure(size) -> sha256`: deterministic data_digest inputs
-  (SHAKE-256 of a fixed seed), one `<size>.bin` per size, reused. Call off the event loop.
-- `main.create_app(settings) -> FastAPI` (tests use it with TestClient).
-- `settings.Settings.from_env(env)` (raises `SettingsError` listing every problem).
-- `db.Database(path)`: `.lock` (asyncio single-writer lock), `.tx()` (BEGIN IMMEDIATE),
-  `.one()/.all()`; `transition_job(c, job_id, dst, trigger, ts=, fail_reason=, kill_reason=, **fields)`,
-  `add_event(c, kind, ...)`.
-- `service.ControllerService`: `register`, `heartbeat`, `submit`, `get_job`, `list_jobs`,
-  `list_workers`, `get_worker`, `schedule_pass`, `is_fresh`, `get_scheduler`,
-  `put_scheduler`, `list_events`, `sample_telemetry`, `maintenance`, `cancel`,
-  `set_draining`, `overview`, `list_decisions`. Raises `NotFound/Conflict/Invalid`.
-- `overview.compute(conn, now, run_id=None)`: totals, per-state, per-tier placed /
-  completed / CPU-s, local offload %, backlog, peak backlog, overflow jobs / demand / time
-  (plan §10, §12.4; D-022). Read-only.
-- Reliability (plan §6.5, §6.6; D-021): `maintenance()` runs every 1 s. Stale workers get a
-  `worker_stale` event and their committed jobs go to UNKNOWN. UNKNOWN longer than
-  `DWR_LOST_TIMEOUT_S` → FAILED(lost); PENDING longer than `queue_timeout_s` →
-  FAILED(queue_timeout). Each applied snapshot reconciles the worker's UNKNOWN jobs: a listed
-  job takes its reported state; a missing one goes back to ASSIGNED if never acked, or to
-  FAILED(lost) if acked.
-- Scheduling (plan §6.3, §6.4): `schedule_pass` builds `scheduler.WorkerView`s from SQLite
-  plus heartbeat state, then calls the active policy. It runs on submit, on a terminal
-  snapshot, when a worker becomes fresh or not busy, and every 1 s. It writes one decision
-  row per placement or reject, plus one at the first attempt; the first-attempt row sets
-  `overflow` (D-015). Aged jobs hold workers (D-017).
-- Host-busy: one `scheduler.HostBusy` per worker, fed `foreign_cpu_pct` from each applied
-  heartbeat. A state change logs a `host_busy`/`host_free` event. `GET /workers` shows
-  `host_busy` and `foreign_cpu_mean`.
-- Endpoints now: `GET /health` (public), `GET /catalog`, `GET /workers[/{id}]`,
-  `POST /jobs`, `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` (202 = requested;
-  409 if terminal), `POST /workers/{id}/drain|enable`, `GET|PUT /scheduler` (PUT → 409
-  while any job is non-terminal), `GET /events?after=&kind=&limit=&order=`,
-  `GET /overview?run_id=`, `GET /decisions?run_id=&limit=`, `GET /jobs?order=desc`
-  (admin: localhost or `X-Admin-Token`);
-  `POST /workers/register`, `POST /workers/{id}/heartbeat`, `GET /jobs/{id}/input`
-  (worker bearer token; input only for the assigned worker, token checked before state).
+  in `DWR_SLOT_CPUS`). Serves `frontend/dist` at `/`, mounted after the API.
+- `main.create_app(settings)` (tests use it with TestClient); `settings.Settings.from_env(env)`
+  (raises `SettingsError` listing every problem).
+- `db.Database(path)`: `.lock` (single writer), `.tx()` (BEGIN IMMEDIATE), `.one()/.all()`;
+  `transition_job(c, job_id, dst, trigger, ts=, fail_reason=, kill_reason=, **fields)`, `add_event()`.
+- `service.ControllerService`: registration, heartbeats, jobs, workers, scheduling, reliability,
+  scheduler config, runs. Raises `NotFound/Conflict/Invalid` (404/409/422).
+  - Scheduling (§6.3, §6.4): `schedule_pass` builds `scheduler.WorkerView`s, calls the active
+    policy (also inline, under the held lock, in a heartbeat that freed a slot, so that reply
+    carries the next assignment: D-026); one decision row per placement/reject plus one at the first attempt, which sets
+    `overflow` (D-015); aged jobs hold workers (D-017). Host-busy per worker from heartbeats,
+    `host_busy`/`host_free` events.
+  - Reliability (§6.5, §6.6; D-021): `maintenance()` every 1 s: stale → UNKNOWN, lost and
+    queue timeouts; each applied snapshot reconciles the worker's UNKNOWN jobs.
+  - Runs (D-024): `create_run` (409 unless idle, one open run), `finish_run`, `list_runs`
+    (open runs carry `elapsed_s`), `export_run`.
+- `overview.compute(conn, now, run_id=None)` (D-022) and `runs.export_rows()/to_csv()`:
+  read-only report helpers. `blobs.BlobStore(root).ensure(size)`: data_digest inputs.
+- Endpoints (admin = localhost or `X-Admin-Token`): `GET /health` (public), `/catalog`,
+  `/workers[/{id}]`, `POST /workers/{id}/drain|enable`, `POST|GET /jobs`, `GET /jobs/{id}`,
+  `POST /jobs/{id}/cancel`, `GET|PUT /scheduler`, `GET /events`, `/overview`, `/decisions`,
+  `POST /runs`, `GET /runs[/{id}]`, `POST /runs/{id}/finish`, `GET /runs/{id}/export?table=`.
+  Worker (bearer token): `POST /workers/register`, `POST /workers/{id}/heartbeat`,
+  `GET /jobs/{id}/input` (assigned worker only; token checked before state).
 
 ## Rules
 - Never connect to a worker. Replies are level-triggered (§6.1).
@@ -53,11 +38,10 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - Every job state change via `transition_job()` (writes job_events in the same tx).
 - Timestamps are controller wall clock at observation; reservations are derived from
   jobs in COMMITTED states, never counted.
-- Placement logic lives in scheduler/ (pure). The controller only builds the views and
-  persists the outcome. The active scheduler config is stored in the `scheduler_config`
-  table, with .env defaults (D-016).
+- Placement logic lives in scheduler/ (pure); the controller builds views and persists the
+  outcome. Active scheduler config in the `scheduler_config` table, .env defaults (D-016).
 - A background task writes one telemetry_samples row per fresh worker every 5 s.
 
 ## Test
-`.\.venv\Scripts\python -m pytest tests/integration` (M3: `test_scheduling.py`; M4: `test_reliability.py`, `test_e2e_m4.py`;
-M5: `test_dashboard_api.py`)
+`.\.venv\Scripts\python -m pytest tests/integration` (M3 `test_scheduling.py`, M4 `test_reliability.py`
+and `test_e2e_m4.py`, M5 `test_dashboard_api.py`, M6 `test_runs_api.py`)

@@ -1,8 +1,8 @@
 # Progress
 
-Branch: `v1`. Current milestone: **M5 code done**. M3, M4 and M5 hardware ACs are waiting
-for the owner (runbooks: docs/evidence/m3.md, m4.md, m5.md). M1 and M2 passed on hardware
-2026-11-15.
+Branch: `v1`. Current milestone: **M6 code done**; hardware runs (reference, pilot, sweep,
+ablation) and the M3–M5 hardware ACs wait for the owner (runbooks: docs/evidence/m3–m6.md).
+M1 and M2 passed on hardware 2026-11-15.
 
 ## M0: Preserve the baseline — DONE
 - AC-0.1 PASS, AC-0.2 PASS — docs/evidence/m0.md
@@ -38,12 +38,18 @@ for the owner (runbooks: docs/evidence/m3.md, m4.md, m5.md). M1 and M2 passed on
 - [x] GET /overview, GET /decisions, newest-first lists (D-022)
 - [x] mid-term code moved to legacy/ with git mv (D-023)
 - AC-5.1 PASS by grep (owner review pending); AC-5.2 PASS (local); AC-5.3 NOT RUN on hardware
-- Tests: `.\.venv\Scripts\python -m pytest` → 250 passed; `npm run lint` clean
+
+## M6 — CODE DONE, RUNS NOT DONE ON HARDWARE
+- [x] gen_trace, replay, analyze, reference, sweep (resumable), stress --follow-runs
+- [x] runs API + CSV export (D-024); harness/analysis definitions (D-025)
+- [x] dispatch overhead cut ~2.1 → ~0.8 s per job; load from slot time (D-026, owner to confirm)
+- [ ] reference, pilot, full sweep, ablation on hardware — owner (≈ 7 h, mains power)
+- AC-6.1 PASS; AC-6.2 PASS (local); AC-6.3 NOT RUN
+- Tests: `.\.venv\Scripts\python -m pytest` → 263 passed; `npm run lint` clean
 
 ## Next step
-Owner: copy the new code to the Linux laptop; run the m3, m4 and m5 runbooks (one session).
-Then M6: gen_trace.py, replay.py, analyze.py, run tagging (POST /runs, export), reference
-timing run, load sweep.
+Owner: re-copy the code to Linux; run the m3–m5 runbooks, then the m6 runbook (reference,
+pilot, sweep, ablation) on mains power. Then M7: rehearse the demo twice; 3 start/stop cycles.
 
 ## Known issues
 - Plan references PLAN_CRITIQUE.md, V1_CRITIQUE.md, PROJECT_PLAN_v2.md; not in the repo.
@@ -56,6 +62,8 @@ timing run, load sweep.
   floor and jobs wait (`mem_floor`). stress.py needs `--cpus all` there (D-018).
 - Fog transfers over the phone hotspot are slow (50 MiB in ~22 s); record the network
   with every experiment.
+- On battery this laptop runs cpu_hash ~1.7× slower: reference and sweep on mains power.
+- Load levels use slot (service) time, not exec_s as §12.2 literally says (D-026): confirm.
 - Linux copy was made by zip, not git: code changes need re-copying (keep its `.env`).
 - One full test run (of ~10) in M2 had 4 timing-related e2e failures not reproduced since.
 - `app/scripts/load_test.py` is untracked pre-existing work; left in app/scripts/ (not moved).

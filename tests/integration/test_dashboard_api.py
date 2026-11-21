@@ -53,9 +53,11 @@ def test_overview_counts_tiers_offload_and_overflow(client):
 def test_overview_by_run_id(client):
     fog = Worker(client, "fog-1", "fog")
     fog.beat()
-    submit(client, run_id="r1")
-    submit(client, run_id="r2")
-    assert client.get("/api/v1/overview", params={"run_id": "r1"}, headers=ADMIN).json()["total_jobs"] == 1
+    rid = client.post("/api/v1/runs", json={"name": "r1"}, headers=ADMIN).json()["run_id"]
+    submit(client, run_id=rid)
+    submit(client)                                            # untagged: not part of the run
+    assert client.get("/api/v1/overview", params={"run_id": rid}, headers=ADMIN).json()["total_jobs"] == 1
+    assert client.get("/api/v1/overview", headers=ADMIN).json()["total_jobs"] == 2
 
 
 def test_decisions_and_newest_first_lists(client):

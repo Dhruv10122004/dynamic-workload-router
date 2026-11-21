@@ -251,3 +251,69 @@ graph, App.css, unused assets, the Google Fonts import and the lucide-react depe
 were removed. The root README gets a pointer that it describes the mid-term prototype
 (a V1 README is the owner's call).
 Plan §: 10, 11, M5.
+
+### D-024 (2026-11-21, M6) Runs API rules and remote stress timing
+Context: §8.2 lists `POST /runs`, `POST /runs/{id}/finish`, `GET /runs/{id}/export`; the
+ablation (§12.6) needs stress on the Fog host at a fixed offset into each run, but only the
+controller listens and the two clocks are not synchronised.
+Decision: `POST /runs` is refused (409) while any job is non-terminal or another run is
+open; the stored policy and scheduler settings are the controller's active ones. A job
+with a `run_id` must name an open run (422 otherwise). Export: jobs and decisions by
+run_id; telemetry samples and events by the run's [start, end] window. `GET /runs` adds
+`elapsed_s` (controller clock) for open runs; `stress.py --follow-runs` on the Fog host
+polls it (admin token) and starts the stress at `at_s - elapsed_s`, so the ablation runs
+unattended. `run_started`/`run_finished` events are logged.
+Alternatives rejected: SSH from the harness to the Fog host (a new connection path);
+starting stress by hand per run (not repeatable). Plan §: 8.2, 12.3, 12.6.
+
+### D-025 (2026-11-21, M6) Harness and analysis definitions
+Context: §12.2–12.5 define the method; several details are open.
+Decision:
+- Job sizes: three fixed parameter sets per type (gen_trace.VARIANTS), drawn uniformly;
+  the reference run measures each on Edge with all slots busy (EdgeOnly, all at t=0).
+  Load L ⇒ Poisson rate L × Edge slots / E[exec_s under the mix]. Bursts: 20 s on / 20 s
+  off, same mean rate. data_digest transfer time is not part of Edge capacity (localhost).
+- One trace per (load, rep), seed = base + 100·rep + load index, replayed by every strategy;
+  strategy order rotates per rep. Sweep = EdgeOnly, LocalFirst, RoundRobin (§12.1) ×
+  {0.5, 1, 1.5, 2, 3} × 3 reps, 180 s arrivals + 120 s drain; ablation = LocalFirst
+  host-busy off/on at load 1.5, 240 s, stress +60 s for 120 s, 3 reps. FogOnly is left out
+  of the sweep (§12.1 lists it only as a sanity baseline).
+- Leftover jobs after the drain are cancelled and counted as unfinished (not completed,
+  not failures). Failure rate = (FAILED + KILLED) / jobs.
+- Overflow demand = Σ exec_s of overflow jobs; for overflow jobs that never ran (EdgeOnly
+  queue timeouts, drain cancels) the reference Edge time of their size is used and counted
+  (`overflow_demand_estimated`); replay copies the reference timings into each manifest so
+  analysis needs nothing outside the run directory.
+- Percentiles: linear interpolation. Summary = mean and sd over reps per (strategy, load).
+  L* = highest load where the strategy is acceptable at it and every lower load.
+- The idle rule (§12.3: CPU < 10% for 30 s) is the default; a block config may relax it
+  (`idle_cpu_pct`, `idle_quiet_s`) and every run records the rule it used.
+- Plots need matplotlib, kept in `requirements-analysis.txt` so workers don't install it.
+Plan §: 12.2, 12.3, 12.4, 12.5, 12.7.
+
+### D-026 (2026-11-21, M6) Dispatch overhead and the capacity basis for load levels
+Context: the first local pilot showed each job holding its Edge slot ~2.3 s longer than its
+`exec_s` (reference run: e.g. 0.05 s data_digest held a slot 2.2–3.3 s). Causes: (a) a freed
+slot was only refilled on the *next* heartbeat (~1 s); (b) each job process imported pydantic
+(0.47 s of ~1.0 s start-up) just to re-check its parameters. With capacity defined from
+`exec_s` (§12.2 literally), "load 1.0" was in fact a heavy overload: nearly every job
+overflowed even under LocalFirst.
+Decision:
+- When an applied heartbeat reports a terminal job (or the worker comes back), the controller
+  runs the scheduling pass under the same lock *before* building that reply, so the reply
+  carries the next assignment (single writer kept; §6.4 already runs a pass on terminal).
+- The job process validates with `shared.catalog.check_params` (same rules, no pydantic); a
+  test checks it agrees with `validate_job` on 4 500 random inputs. Controller and agent
+  still use `validate_job` (invariant 3 unchanged). Start-up fell from ~1.0 s to ~0.4 s.
+  Result: per-job slot overhead ~2.1 s → ~0.8 s.
+- The reference run records both `mean_exec_s` and `mean_service_s` (assign → end on the
+  controller clock = how long a job really holds an Edge slot). Load levels default to the
+  service time (`"capacity_basis": "service"`), so load 1.0 means Edge is saturated; a block
+  can set `"capacity_basis": "exec_s"` for the plan's literal definition. Every trace records
+  its basis. Overflow demand still uses exec_s (Cloud would need execution time, not our
+  dispatch overhead).
+- Every run records the controller laptop's power state (`harness_power`): on battery the
+  same cpu_hash took ~1.7× longer. The reference and the sweep must run in the same state.
+Alternatives rejected: shorter heartbeat interval (more load, still a poll); keeping exec_s
+as the basis (makes the low end of the load sweep meaningless). Owner to confirm the basis.
+Plan §: 4, 6.4, 12.2. Amends D-025 (capacity definition).

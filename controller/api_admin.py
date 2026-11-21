@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import psutil
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict
 
 from controller.auth import require_admin
@@ -11,6 +11,15 @@ from shared.catalog import CATALOG
 
 public = APIRouter(tags=["health"])
 router = APIRouter(tags=["admin"], dependencies=[Depends(require_admin)])
+
+
+class RunCreate(BaseModel):
+    """POST /runs body. `config` is free-form run metadata (load, seed, network type, ...)."""
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    trace_hash: str | None = None
+    git_commit: str | None = None
+    config: dict = {}
 
 
 class SchedulerUpdate(BaseModel):
@@ -76,6 +85,35 @@ async def get_scheduler(request: Request):
 async def put_scheduler(body: SchedulerUpdate, request: Request):
     """409 while any job is non-terminal (plan §7.3)."""
     return await request.app.state.service.put_scheduler(body.model_dump(exclude_none=True))
+
+
+@router.post("/runs", status_code=201)
+async def create_run(body: RunCreate, request: Request):
+    """Tag an experiment run (plan §8.2). 409 unless idle and no other run is open."""
+    return await request.app.state.service.create_run(name=body.name, trace_hash=body.trace_hash,
+                                                      config=body.config, git_commit=body.git_commit)
+
+
+@router.get("/runs")
+async def list_runs(request: Request, active: bool = False, limit: int = Query(100, ge=1, le=5000)):
+    return request.app.state.service.list_runs(active=active, limit=limit)
+
+
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str, request: Request):
+    return request.app.state.service.get_run(run_id)
+
+
+@router.post("/runs/{run_id}/finish")
+async def finish_run(run_id: str, request: Request):
+    return await request.app.state.service.finish_run(run_id)
+
+
+@router.get("/runs/{run_id}/export", response_class=PlainTextResponse)
+async def export_run(run_id: str, request: Request, table: str):
+    """CSV of one table for this run: jobs | decisions | telemetry | events (plan §12.7)."""
+    csv_text = request.app.state.service.export_run(run_id, table)
+    return PlainTextResponse(csv_text, media_type="text/csv")
 
 
 @router.get("/overview")

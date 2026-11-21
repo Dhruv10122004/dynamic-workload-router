@@ -55,7 +55,8 @@ Every job state change goes through shared/states.py `transition()`.
 - Controller by hand: `.\.venv\Scripts\python -m controller` (reads .env)
 - Worker agent by hand: `.\.venv\Scripts\python -m worker.agent [--env-file path]`
 - Linux worker: `./scripts/setup.sh`, then `.venv/bin/python -m worker.agent`
-- Experiments: `python -m experiments.burst|audit|stress --help` (see experiments/CLAUDE.md)
+- Experiments: `python -m experiments.reference|sweep|analyze|replay|gen_trace|stress|burst|audit --help`
+  (see experiments/CLAUDE.md; runbook in docs/evidence/m6.md; analysis needs requirements-analysis.txt)
 - Dashboard: `cd frontend; npm ci; npm run build`, then open http://127.0.0.1:8000/
   (served by the controller)
 Note: in Git Bash `python` is an MSYS build without deps; use the venv python.

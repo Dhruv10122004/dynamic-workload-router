@@ -1,7 +1,9 @@
 """Workload catalog (plan §4): types, parameter bounds, declared memory, runtime caps.
 
-Pure data. Validation of incoming parameters lives in shared/schemas.py and uses
-these bounds; the controller serves this catalog at GET /catalog.
+Pure data. Validation of incoming parameters lives in shared/schemas.py (pydantic) and uses
+these bounds; the controller serves this catalog at GET /catalog. `check_params` is the same
+check without pydantic, for the job process itself, where importing pydantic would cost
+~0.5 s per job (DECISIONS D-026); a test keeps the two in agreement.
 """
 from __future__ import annotations
 
@@ -72,3 +74,33 @@ CATALOG: dict[str, WorkloadType] = {
         "Allocate and touch mem_mb, then hold it for hold_s.",
     ),
 }
+
+
+def check_params(type_: str, params: object) -> dict:
+    """Validate params like shared.schemas.validate_job (strict types, bounds, no unknown
+    keys, defaults filled in, test-only params allowed) without importing pydantic.
+    Raises ValueError with every problem."""
+    wt = CATALOG.get(type_)
+    if wt is None:
+        raise ValueError(f"unknown workload type {type_!r}")
+    if not isinstance(params, dict):
+        raise ValueError("params must be an object")
+    specs = {s.name: s for s in wt.params}
+    errors = [f"{k}: unknown parameter" for k in params if k not in specs]
+    out: dict = {}
+    for s in wt.params:
+        if s.name not in params or (s.test_only and params[s.name] is None):
+            if not s.test_only:
+                out[s.name] = s.default
+            continue
+        v = params[s.name]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or (s.kind is int and not isinstance(v, int)):
+            errors.append(f"{s.name}: must be {s.kind.__name__}")
+            continue
+        if not (s.min <= v <= s.max) or (isinstance(v, float) and math.isnan(v)):
+            errors.append(f"{s.name}: must be in [{s.min}, {s.max}]")
+            continue
+        out[s.name] = s.kind(v)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return out
