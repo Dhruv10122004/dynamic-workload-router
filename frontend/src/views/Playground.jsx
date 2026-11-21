@@ -78,6 +78,7 @@ function Now({ catalog, activity, onStart, onStop }) {
   const [custom, setCustom] = useState({ load: 1.5, mix: 'mixed', policy: 'LocalFirst', duration_s: 60 });
   const [showCustom, setShowCustom] = useState(false);
   const running = activity && activity.running;
+  const blocking = running && activity.kind !== 'free_play';
   const lim = catalog.custom_limits;
   const pct = activity && activity.total ? (100 * activity.submitted) / activity.total : 0;
   return (
@@ -125,7 +126,7 @@ function Now({ catalog, activity, onStart, onStop }) {
               {catalog.policies.map((p) => <option key={p}>{p}</option>)}
             </select>
           </label>
-          <button className="btn primary wide" disabled={running} onClick={() => onStart({ custom })}>Start custom</button>
+          <button className="btn primary wide" disabled={blocking} onClick={() => onStart({ custom })}>Start custom</button>
         </div>
       )}
     </div>
@@ -134,6 +135,7 @@ function Now({ catalog, activity, onStart, onStop }) {
 
 function Activities({ catalog, activity, onError }) {
   const running = activity && activity.running;
+  const blocking = running && activity.kind !== 'free_play';
   const start = async (body) => {
     try { await api('/playground/activity', { method: 'POST', body }); onError(null); } catch (e) { onError(e.message); }
   };
@@ -148,7 +150,7 @@ function Activities({ catalog, activity, onError }) {
           {catalog.scenarios.map((s) => {
             const on = running && activity.title === s.title;
             return (
-              <button key={s.id} className={`preset ${on ? 'on' : ''}`} disabled={running} title={s.watch}
+              <button key={s.id} className={`preset ${on ? 'on' : ''}`} disabled={blocking} title={s.watch}
                       onClick={() => start({ scenario: s.id })}>
                 <span className="preset-title">{s.title}</span>
                 <span className="preset-text">{s.watch}</span>
@@ -267,7 +269,30 @@ function WhyCard({ jobId, onClose }) {
   );
 }
 
-function TaskPanel({ tasks, hint, why, onLaunched, onClose, onError }) {
+function PolicyPicker({ policies, activity, onError }) {
+  const sched = usePoll('/scheduler', 3000);
+  const [text, setText] = useState(null);
+  const locked = activity && activity.running && activity.kind !== 'free_play';
+  const current = locked ? activity.policy : sched.data && sched.data.policy;
+  const change = async (policy) => {
+    try {
+      const r = await api('/playground/policy', { method: 'POST', body: { policy } });
+      setText(r.policy_text);
+      onError(null);
+    } catch (e) { onError(e.message); }
+  };
+  return (
+    <label className="policy-pick">
+      <span>Policy for your clicks</span>
+      <select value={current || ''} disabled={locked || !current} onChange={(e) => change(e.target.value)}>
+        {policies.map((p) => <option key={p}>{p}</option>)}
+      </select>
+      <span className="dim">{locked ? `set by '${activity.title}'` : text || (activity && activity.kind === 'free_play' && activity.running ? activity.policy_text : '')}</span>
+    </label>
+  );
+}
+
+function TaskPanel({ tasks, hint, policies, activity, why, onLaunched, onClose, onError }) {
   const [custom, setCustom] = useState(false);
   const launch = async (body) => {
     const r = await api('/playground/task', { method: 'POST', body });
@@ -280,6 +305,7 @@ function TaskPanel({ tasks, hint, why, onLaunched, onClose, onError }) {
     <div className="panel col">
       <h3><Icon name="play" size={15} /> Launch a task</h3>
       <Hint id="tasks" text={hint} />
+      <PolicyPicker policies={policies} activity={activity} onError={onError} />
       <div className="palette">
         {tasks.map((t) => (
           <button key={t.id} className="btn task" onClick={() => click(t.id)}>
@@ -416,7 +442,10 @@ export default function Playground() {
     const point = { t: data.now, v: data.queue.length };
     later(() => setHistory((h) => (reset ? [point] : [...h, point].filter((p) => p.t >= data.now - HISTORY_S))), 0);
     // toasts: laptop events from the story feed, and an activity starting or finishing
-    const news = data.feed.filter((f) => TOAST_KINDS.has(f.kind)).map((f) => ({ kind: f.kind, text: f.text }));
+    // only fresh events, and never the backlog of the first poll
+    const first = prevRunning.current === undefined;
+    const news = first ? [] : data.feed.filter((f) => TOAST_KINDS.has(f.kind) && f.ts >= data.now - 15)
+      .map((f) => ({ kind: f.kind, text: f.text }));
     const running = a ? a.running : null;
     if (prevRunning.current !== undefined && a && running !== prevRunning.current) {
       news.push(running ? { kind: 'place', text: `Started: ${a.title}` }
@@ -467,7 +496,7 @@ export default function Playground() {
                    onWhy={(j) => openWhy([j])} />
       </div>
       <div className="pg-cols">
-        <TaskPanel tasks={catalog.data.tasks} hint={hints.tasks} why={why} onLaunched={openWhy} onClose={closeWhy} onError={setMsg} />
+        <TaskPanel tasks={catalog.data.tasks} hint={hints.tasks} policies={catalog.data.policies} activity={data.activity} why={why} onLaunched={openWhy} onClose={closeWhy} onError={setMsg} />
         <Story feed={feed} hint={hints.story} accents={accents} onWhy={openWhy} />
         <Tally board={data.scoreboard} hint={hints.tally} history={history} />
       </div>

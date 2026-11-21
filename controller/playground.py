@@ -381,6 +381,21 @@ class Playground:
                                                   run_id=a.run_id, trace_index=idx))
         return res["job_id"]
 
+    async def set_policy(self, policy: str) -> dict:
+        """Policy for hands-on (free play) clicks. A run keeps one policy, so an idle free-play
+        run is closed and the next click opens a new one with this policy (D-031)."""
+        if policy not in POLICY_TEXT:
+            raise Invalid([{"loc": ["policy"], "msg": f"one of {sorted(POLICY_TEXT)}"}])
+        a = self.active if self.active and not self.active.finished else None
+        if a is not None:
+            if a.kind != "free_play":
+                raise Conflict(f"'{a.title}' is running with its own policy: stop it first")
+            if self._run_busy(a.run_id):
+                raise Conflict("your tasks are still running: wait for them to finish, then change the policy")
+            await self._close(a)
+        await self.service.put_scheduler({"policy": policy})
+        return {"policy": policy, "policy_text": POLICY_TEXT[policy]}
+
     async def stop(self) -> dict:
         a = self.active
         if a is None:

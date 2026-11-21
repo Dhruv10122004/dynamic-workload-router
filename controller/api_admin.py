@@ -149,6 +149,17 @@ async def playground_start(body: PlaygroundStart, request: Request):
     return await request.app.state.playground.start(scenario=body.scenario, custom=body.custom)
 
 
+class PlaygroundPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    policy: str
+
+
+@router.post("/playground/policy")
+async def playground_policy(body: PlaygroundPolicy, request: Request):
+    """Policy for hands-on clicks; 409 while a preset/custom activity or free-play tasks run."""
+    return await request.app.state.playground.set_policy(body.policy)
+
+
 @router.post("/playground/activity/stop")
 async def playground_stop(request: Request):
     return await request.app.state.playground.stop()

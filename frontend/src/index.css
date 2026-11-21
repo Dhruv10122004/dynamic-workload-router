@@ -315,7 +315,8 @@ form label.inline { flex-direction: row; align-items: center; gap: 6px; }
 
 /* sparkline */
 .spark { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
-.spark svg { display: block; width: 100%; height: auto; }
+.spark svg { display: block; width: 100%; }
+.spark-line { vector-effect: non-scaling-stroke; }
 .spark-line { fill: none; stroke: var(--warn); stroke-width: 1.6; }
 .spark-area { fill: rgba(245, 158, 11, 0.12); }
 .spark-label, .spark-empty { font-size: 11px; color: var(--dim); }
@@ -347,3 +348,8 @@ form label.inline { flex-direction: row; align-items: center; gap: 6px; }
   .map-link.flow, .cue, .tile, .queue-dot circle { animation: none; }
   .map-dot { transition: opacity 0.3s; }
 }
+
+/* policy picker for hands-on clicks (D-031) */
+.policy-pick { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 10px; font-size: 12px; }
+.policy-pick > span:first-child { color: var(--dim); }
+.policy-pick > .dim { grid-column: 1 / -1; font-size: 11px; }

@@ -57,6 +57,7 @@ M1 and M2 passed on hardware 2026-11-15.
       fixed (D-029: jobs no longer counted as foreign CPU)
 - [x] live network map (jobs fly controller → laptop / queue → laptop), per-laptop colours,
       icons, hints, queue sparkline, toasts (D-030); screenshots `img/playground-map-*.png`
+- [x] policy picker for clicks; free play no longer greys out the start buttons (D-031)
 
 ## Next step
 Owner: verify the M3–M5 hardware results and the playground (evidence files), decide D-026

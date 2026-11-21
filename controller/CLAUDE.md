@@ -25,7 +25,7 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - `playground.Playground(service)` (D-027, attached as `app.state.playground`): presets
   (`SCENARIOS`), hands-on palette (`TASKS`), `start/stop` activities (tagged runs, block
   "playground"), `submit_task`, `explain(job_id)` ("Why here?" card), `narrate(after_ts)` (story
-  feed; each line has `kind` and `worker_id`, D-030), `catalog()` also serves `HINTS` + `LEGEND`, `live(after_ts)` (lanes per worker/slot with live stats, queue, scoreboard, compare),
+  feed; each line has `kind` and `worker_id`, D-030), `catalog()` also serves `HINTS` + `LEGEND`, `set_policy()` (D-031), `live(after_ts)` (lanes per worker/slot with live stats, queue, scoreboard, compare),
   `recover()` (closes an open playground run and cancels its jobs at startup). All
   teacher-facing wording lives here.
 - `overview.compute(conn, now, run_id=None)` (D-022) and `runs.export_rows()/to_csv()`:
@@ -34,7 +34,7 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
   `/workers[/{id}]`, `POST /workers/{id}/drain|enable`, `POST|GET /jobs`, `GET /jobs/{id}`,
   `POST /jobs/{id}/cancel`, `GET|PUT /scheduler`, `GET /events`, `/overview`, `/decisions`,
   `POST /runs`, `GET /runs[/{id}]`, `POST /runs/{id}/finish`, `GET /runs/{id}/export?table=`,
-  `GET /playground/scenarios|activity|live?after=|explain/{id}`, `POST /playground/activity|activity/stop|task`.
+  `GET /playground/scenarios|activity|live?after=|explain/{id}`, `POST /playground/activity|activity/stop|task|policy`.
   Worker (bearer token): `POST /workers/register`, `POST /workers/{id}/heartbeat`,
   `GET /jobs/{id}/input` (assigned worker only; token checked before state).
 

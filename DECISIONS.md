@@ -382,3 +382,15 @@ sparkline plots polled values only, per activity.
 Alternatives rejected: a server event stream (new transport for a view-only feature); a chart
 or graph library (offline demo, no new dependencies).
 Plan §: 10 (dashboard), M7 demo.
+
+### D-031 (2026-11-22, playground) Policy picker for hands-on clicks
+Context: the owner tried RoundRobin from the Custom panel while a free-play session (opened by
+a task click) was active; the page disabled every start button, so it looked as if policies
+did nothing. Hands-on clicks also had no way to choose a policy.
+Decision: free play never disables the activity buttons (the server already closes an idle
+free-play run, and answers 409 with a reason otherwise). `POST /playground/policy` sets the
+policy for clicks: an idle free-play run is closed so every run keeps one policy, and the next
+click opens a new one; 409 while a preset/custom activity or free-play tasks are running.
+Checked on the real laptops: RoundRobin placed clicks edge-1, fog-1, edge-1 (fog-1 full: edge-1).
+Alternatives rejected: changing the policy of a running run (its comparison row would mix policies).
+Plan §: 6.4 (policies), M7 demo.

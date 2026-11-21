@@ -76,3 +76,10 @@ laptops: `img/playground-map-1366.png` (queue 9, edge-1 2 slots busy, fog-1 1 sl
 `img/playground-map-present.png` (1920 px presenter mode, queue 18). Tests: playground
 feed `kind`/`worker_id` and hints/legend; AC-5.1 scan passes. The offline (dashed red)
 link was not re-run with a Wi-Fi drop on hardware; it uses the same `fresh` flag as the cards.
+
+## Policy for clicks (2026-11-22, D-031)
+Bug reported by the owner: with a free-play session open, "Start custom" and the presets were
+disabled, so a RoundRobin custom activity could not start. Fixed; added `POST /playground/policy`
+and a picker in "Launch a task". Real laptops, RoundRobin, four "Small hash" clicks:
+edge-1, fog-1, edge-1, edge-1 (fog-1's single slot still busy); card #2: "a slot was free, so
+fog-1 (fog) took it straight away". Policy set back to LocalFirst afterwards.

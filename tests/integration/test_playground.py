@@ -148,6 +148,42 @@ def test_free_play_run_opens_on_first_click_and_is_reused(client):
     client.post(f"{PG}/activity/stop", headers=ADMIN)
 
 
+def test_policy_for_clicks_changes_placement_and_starts_a_new_free_play_run(client):
+    edge, fog = SlotWorker(client, "edge-1", "edge", slots=2), SlotWorker(client, "fog-1", "fog", slots=1)
+    edge.beat(), fog.beat()
+    first = click(client, "small_hash")
+    until(lambda: len(edge.running) == 1, beat=[edge, fog])
+    # free play with a task in flight: the policy can't change mid-run
+    assert client.post(f"{PG}/policy", json={"policy": "RoundRobin"}, headers=ADMIN).status_code == 409
+    for j in list(edge.running):
+        edge.finish(j)
+    until(lambda: card(client, first["jobs"][0]["job_id"])["state"] == "SUCCEEDED", beat=[edge, fog])
+    assert client.post(f"{PG}/policy", json={"policy": "Nope"}, headers=ADMIN).status_code == 422
+    r = client.post(f"{PG}/policy", json={"policy": "RoundRobin"}, headers=ADMIN)
+    assert r.status_code == 200 and r.json()["policy"] == "RoundRobin"
+    assert client.get("/api/v1/scheduler", headers=ADMIN).json()["policy"] == "RoundRobin"
+    # the next clicks open a new free-play run under RoundRobin, which takes turns
+    ids = [click(client, "small_hash")["jobs"][0]["job_id"] for _ in range(2)]
+    act = client.get(f"{PG}/activity", headers=ADMIN).json()
+    assert act["kind"] == "free_play" and act["policy"] == "RoundRobin" and act["run_id"] != first["activity"]["run_id"]
+    until(lambda: all(client.get(f"/api/v1/jobs/{j}", headers=ADMIN).json()["worker_id"] for j in ids), beat=[edge, fog])
+    assert {client.get(f"/api/v1/jobs/{j}", headers=ADMIN).json()["worker_id"] for j in ids} == {"edge-1", "fog-1"}
+    # a preset can still start from free play (the server closes it once its tasks are done)
+    for _ in range(20):
+        for w in (edge, fog):
+            for j in list(w.running):
+                w.finish(j)
+            w.beat()
+        if not client.get("/api/v1/jobs", params={"state": "RUNNING"}, headers=ADMIN).json() and \
+                not client.get("/api/v1/jobs", params={"state": "ASSIGNED"}, headers=ADMIN).json():
+            break
+        time.sleep(0.05)
+    r = client.post(f"{PG}/activity", json={"scenario": "quiet"}, headers=ADMIN)
+    assert r.status_code == 200, r.text
+    assert client.post(f"{PG}/policy", json={"policy": "EdgeOnly"}, headers=ADMIN).status_code == 409
+    client.post(f"{PG}/activity/stop", headers=ADMIN)
+
+
 def test_custom_activity_validation_start_and_stop(client):
     edge = SlotWorker(client, "edge-1", "edge", slots=1)
     edge.beat()
