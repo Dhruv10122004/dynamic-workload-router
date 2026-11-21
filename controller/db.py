@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     kill_latency_ms REAL,
     overflow INTEGER NOT NULL DEFAULT 0,
     run_id TEXT, trace_index INTEGER,
-    late_result_json TEXT
+    late_result_json TEXT,
+    slot INTEGER
 );
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 CREATE INDEX IF NOT EXISTS jobs_worker_state ON jobs(worker_id, state);
@@ -125,8 +126,11 @@ JOB_FIELDS = frozenset({
     "worker_id", "acked", "assign_ts", "ack_ts", "start_ts", "end_ts", "hostname",
     "transfer_bytes", "transfer_s", "spawn_s", "exec_s", "cpu_s", "peak_rss_mb", "exit_code",
     "pid", "pid_create_time", "result_json", "error", "termination_verified", "kill_latency_ms",
-    "overflow", "late_result_json",
+    "overflow", "late_result_json", "slot",
 })
+
+# Columns added after a release; Database() adds them to an existing file (D-028).
+MIGRATIONS = (("jobs", "slot", "INTEGER"),)
 
 
 class Database:
@@ -140,6 +144,10 @@ class Database:
         self.conn.execute("PRAGMA synchronous=FULL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)
+        for table, column, kind in MIGRATIONS:
+            have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
         self.lock = asyncio.Lock()
 
     def close(self) -> None:

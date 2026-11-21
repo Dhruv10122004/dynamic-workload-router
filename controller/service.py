@@ -67,6 +67,7 @@ class WorkerRuntime:
     telemetry: dict | None = None
     host_busy: HostBusy = field(default_factory=HostBusy)
     stale: bool = False   # marked by the sweep; cleared by the next heartbeat
+    job_stats: dict = field(default_factory=dict)   # job_id -> live cpu_pct/rss_mb (cache only, D-028)
 
 
 @dataclass(frozen=True)
@@ -402,6 +403,9 @@ class ControllerService:
                     log.info("worker %s is %s (foreign CPU mean %.1f%%)", worker_id,
                              "host_busy" if busy else "free again", rt.host_busy.mean)
                 changed = self._apply_snapshot(c, worker_id, hb.jobs, now) if apply else False
+                if apply:
+                    rt.job_stats = {s.job_id: {"cpu_pct": s.cpu_pct, "rss_mb": s.rss_mb}
+                                    for s in hb.jobs if s.state == "RUNNING" and s.rss_mb is not None}
             if changed or not was_fresh:
                 # A slot just freed (or the worker is back): place now, so this very reply
                 # carries the next assignment instead of the next heartbeat ~1 s later.
@@ -752,7 +756,7 @@ class ControllerService:
 
 def _snapshot_fields(s: JobSnapshot) -> dict:
     f = {k: getattr(s, k) for k in ("pid", "pid_create_time", "transfer_bytes", "transfer_s", "spawn_s",
-                                    "exit_code", "error", "kill_latency_ms") if getattr(s, k) is not None}
+                                    "exit_code", "error", "kill_latency_ms", "slot") if getattr(s, k) is not None}
     if s.termination_verified is not None:
         f["termination_verified"] = int(s.termination_verified)
     if s.result is not None:

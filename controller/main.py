@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from controller import api_admin, api_jobs, api_workers
 from controller.db import Database
+from controller.playground import Playground
 from controller.service import ControllerService, ServiceError
 from controller.settings import Settings
 from shared.schemas import SCHEMA_VERSION
@@ -23,18 +24,22 @@ API_PREFIX = "/api/v1"
 def create_app(settings: Settings) -> FastAPI:
     db = Database(settings.db_path)
     service = ControllerService(settings, db)
+    playground = Playground(service)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await service.start()
+        await playground.recover()
         try:
             yield
         finally:
+            playground.shutdown()
             await service.stop()
 
     app = FastAPI(title="DWR controller", version=f"schema-{SCHEMA_VERSION}", lifespan=lifespan)
     app.state.settings = settings
     app.state.service = service
+    app.state.playground = playground
     app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),
                        allow_methods=["*"], allow_headers=["*"])
     for r in (api_admin.public, api_admin.router, api_jobs.router, api_workers.router):

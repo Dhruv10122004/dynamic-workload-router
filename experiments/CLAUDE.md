@@ -24,7 +24,8 @@ Run from the repo root with the venv python: `python -m experiments.<name> --hel
 - `stress.py`: foreign CPU load (§12.6). `--follow-runs --block ablation --admin-token T`
   stresses each run that asks for it, timed by the controller's `elapsed_s` (D-024).
 - `burst.py`, `audit.py` (M3): burst placement report; overbooking replay of job_events.
-- `common.py`: `client()`, `git_commit()`, `wait_idle()`, `workers_snapshot()`, `percentile()`.
+- `common.py`: `client()`, `git_commit()`, `wait_idle()`, `workers_snapshot()`, `percentile()`,
+  `power_state()`, `log()`. Trace maths lives in `shared/traces.py` (shared with the playground).
 
 ## Rules
 - Talk to the controller only through its HTTP API (audit.py reads SQLite read-only).

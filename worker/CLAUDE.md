@@ -15,7 +15,9 @@ verified termination), restart recovery, telemetry.
   `spawns` table, one row per spawn: AC-4.5); `row_to_snapshot(row)`.
 - `supervisor.py`: `Supervisor(journal, slot_cpus, jobs_dir, on_terminal=, fetch_input=)` —
   `tick()`, `run(stop)`, `request_cancel(job_id)` (ACCEPTED → CANCELLED; RUNNING → verified
-  KILLED(cancel)), `free_slots()`, `stuck_slots()`, `job_processes()`; `classify_exit(rc, job_dir)`.
+  KILLED(cancel)), `free_slots()`, `stuck_slots()`, `job_processes()`, `job_stats()` (live
+  tree CPU% and RSS per running job, sampled by the watchdog; sent in RUNNING snapshots, D-028);
+  `classify_exit(rc, job_dir)`.
   A slot is held during the input download (own thread), then by the process, then (if a
   kill was not verified) as `stuck` until the processes vanish. Each tick checks
   timeout_s / max_runtime_s from spawn and the tree's RSS every 250 ms vs 110% of `mem_mb`,

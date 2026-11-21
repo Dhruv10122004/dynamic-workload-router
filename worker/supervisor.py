@@ -59,6 +59,10 @@ class _Running:
     files: list[IO] = field(default_factory=list)
     next_rss_check: float = 0.0
     peak_rss_mb: float = 0.0
+    # live stats for the playground (D-028): latest tree CPU% (100 = one core) and RSS
+    cpu_pct: float | None = None
+    rss_mb: float | None = None
+    stat_procs: dict = field(default_factory=dict)   # pid -> psutil.Process kept for cpu_percent()
     # termination in progress
     kill_reason: str | None = None
     kill_t0: float | None = None                     # perf_counter when termination began
@@ -115,6 +119,12 @@ class Supervisor:
 
     def stuck_slots(self) -> list[int]:
         return sorted(s for s, v in self._slots.items() if isinstance(v, _Stuck))
+
+    def job_stats(self) -> dict[str, dict]:
+        """Latest live CPU% (100 = one core, summed over the job's tree) and RSS per running job,
+        sampled by the watchdog every 250 ms (playground, D-028)."""
+        return {r.job_id: {"cpu_pct": r.cpu_pct, "rss_mb": r.rss_mb}
+                for r in list(self._slots.values()) if isinstance(r, _Running) and r.rss_mb is not None}
 
     def job_processes(self) -> list[psutil.Process]:
         """Root process of every running job (for own-CPU telemetry)."""
@@ -282,14 +292,21 @@ class Supervisor:
         if r.proc is None or now < r.next_rss_check:
             return
         r.next_rss_check = now + WATCHDOG_INTERVAL_S
-        rss = 0
+        rss, cpu = 0, 0.0
+        live = {}
         for p in proctree.tree(r.proc):
+            # cpu_percent() needs the same Process object between calls (first call returns 0).
+            q = r.stat_procs.get(p.pid, p)
+            live[p.pid] = q
             try:
-                rss += p.memory_info().rss
+                rss += q.memory_info().rss
+                cpu += q.cpu_percent(None)
             except psutil.Error:
                 pass
+        r.stat_procs = live
         rss_mb = rss / (1024 * 1024)
         r.peak_rss_mb = max(r.peak_rss_mb, rss_mb)
+        r.rss_mb, r.cpu_pct = round(rss_mb, 1), round(cpu, 1)
         limit = RSS_LIMIT_FACTOR * r.spec["mem_mb"]
         if rss_mb > limit:
             self._begin_termination(r, "memory_limit", f"tree RSS {rss_mb:.0f} MB > {limit:.0f} MB "

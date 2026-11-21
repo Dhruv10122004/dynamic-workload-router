@@ -195,3 +195,22 @@ def test_recovery_reports_real_outcome_when_result_exists(journal, tmp_path):
     recover(journal, tmp_path / "jobs")
     row = journal.get("d1")
     assert row["state"] == "SUCCEEDED" and '"checksum"' in row["result_json"]
+
+
+# ---------------------------------------------------------------- live stats (playground, D-028)
+
+def test_job_stats_report_live_cpu_and_rss(journal, tmp_path):
+    sup = Supervisor(journal, [[0]], tmp_path / "jobs")
+    start(sup, journal, "ls1", spec())
+    end = time.monotonic() + 3
+    stats = {}
+    while time.monotonic() < end:
+        sup.tick()
+        stats = sup.job_stats().get("ls1") or {}
+        if (stats.get("cpu_pct") or 0) > 50:     # first samples cover the interpreter starting up
+            break
+        time.sleep(0.1)
+    assert stats["rss_mb"] > 5 and stats["cpu_pct"] > 20    # a busy hash loop: most of one core
+    sup.request_cancel("ls1")
+    tick_until(sup, lambda: journal.get("ls1")["state"] == "KILLED")
+    assert sup.job_stats() == {}

@@ -45,11 +45,19 @@ M1 and M2 passed on hardware 2026-11-15.
 - [x] dispatch overhead cut ~2.1 → ~0.8 s per job; load from slot time (D-026, owner to confirm)
 - [ ] reference, pilot, full sweep, ablation on hardware — owner (≈ 7 h, mains power)
 - AC-6.1 PASS; AC-6.2 PASS (local); AC-6.3 NOT RUN
-- Tests: `.\.venv\Scripts\python -m pytest` → 263 passed; `npm run lint` clean
+- Tests: `.\.venv\Scripts\python -m pytest` → 275 passed; `npm run lint` clean
+
+## Classroom Playground — DONE (owner review pending)
+- [x] `#Playground` tab: presets + custom activities, live lanes (PID, cores, CPU%, RAM),
+      Cloud overflow queue, hands-on task palette + builder, "Why here?" cards, story feed,
+      scoreboard + comparison, presenter mode (D-027, D-028)
+- [x] run on both laptops: every preset, Wi-Fi disconnect, both-busy — docs/evidence/playground.md
+- `experiments/reference.json` measured on mains (2026-11-21); Linux laptop was on battery
 
 ## Next step
-Owner: re-copy the code to Linux; run the m3–m5 runbooks, then the m6 runbook (reference,
-pilot, sweep, ablation) on mains power. Then M7: rehearse the demo twice; 3 start/stop cycles.
+Owner: verify the M3–M5 hardware results and the playground (evidence files), decide D-026
+(load basis) and the SLO values. Then M6 runs on mains power (both laptops; reference done),
+which Claude can drive over SSH. Then M7: rehearse the demo twice; 3 start/stop cycles.
 
 ## Known issues
 - Plan references PLAN_CRITIQUE.md, V1_CRITIQUE.md, PROJECT_PLAN_v2.md; not in the repo.
@@ -64,7 +72,7 @@ pilot, sweep, ablation) on mains power. Then M7: rehearse the demo twice; 3 star
   with every experiment.
 - On battery this laptop runs cpu_hash ~1.7× slower: reference and sweep on mains power.
 - Load levels use slot (service) time, not exec_s as §12.2 literally says (D-026): confirm.
-- Linux copy was made by zip, not git: code changes need re-copying (keep its `.env`).
+- Linux copy is synced over SSH (git archive / tar); agent via `scripts/agent.sh` (no systemd yet).
 - One full test run (of ~10) in M2 had 4 timing-related e2e failures not reproduced since.
 - `app/scripts/load_test.py` is untracked pre-existing work; left in app/scripts/ (not moved).
 - README.md still describes the mid-term prototype (a pointer note was added).

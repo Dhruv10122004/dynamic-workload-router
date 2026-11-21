@@ -1,0 +1,66 @@
+{
+  "edge_worker": "edge-1",
+  "edge_slots": 2,
+  "edge_cores": [
+    [
+      2
+    ],
+    [
+      4
+    ]
+  ],
+  "hostname": "LAPTOP-L5C3UP7P",
+  "mean_exec_s": {
+    "cpu_hash:{\"iterations\":1000000}": 0.6754378125006042,
+    "cpu_hash:{\"iterations\":2000000}": 1.4105967249961395,
+    "cpu_hash:{\"iterations\":500000}": 0.3437124375013809,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 0.06178428749990417,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 0.03196798749559093,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 0.04373900000791764,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 1.0213579875089636,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 2.045380899995507,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 3.088202712508064
+  },
+  "stdev_exec_s": {
+    "cpu_hash:{\"iterations\":1000000}": 0.01724916939154456,
+    "cpu_hash:{\"iterations\":2000000}": 0.045990296693545374,
+    "cpu_hash:{\"iterations\":500000}": 0.010491396086429853,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 0.03205631669348946,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 0.0058369562094935015,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 0.013176633318454574,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 0.0035435105301598402,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 0.007374518303802515,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 0.014210576361734997
+  },
+  "mean_service_s": {
+    "cpu_hash:{\"iterations\":1000000}": 1.1848549842834473,
+    "cpu_hash:{\"iterations\":2000000}": 1.9319434762001038,
+    "cpu_hash:{\"iterations\":500000}": 0.8643900156021118,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 0.767958253622055,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 0.63571497797966,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 0.7265231907367706,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 1.5290702879428864,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 2.611904412508011,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 3.6717346012592316
+  },
+  "n": {
+    "cpu_hash:{\"iterations\":1000000}": 8,
+    "cpu_hash:{\"iterations\":2000000}": 8,
+    "cpu_hash:{\"iterations\":500000}": 8,
+    "data_digest:{\"input_bytes\":16777216,\"rounds\":2}": 8,
+    "data_digest:{\"input_bytes\":4194304,\"rounds\":2}": 8,
+    "data_digest:{\"input_bytes\":8388608,\"rounds\":2}": 8,
+    "mem_touch:{\"hold_s\":1.0,\"mem_mb\":64}": 8,
+    "mem_touch:{\"hold_s\":2.0,\"mem_mb\":128}": 8,
+    "mem_touch:{\"hold_s\":3.0,\"mem_mb\":256}": 8
+  },
+  "run_id": "20261121-231449-075621",
+  "run_dir": "D:\\PROJECTS\\dynamic-workload-router\\experiments\\results\\reference\\20261121-231449-075621",
+  "git_commit": "7f0f1917e1796c645285a7056662035b4a2e8b00-dirty",
+  "harness_power": {
+    "battery": true,
+    "plugged_in": true,
+    "percent": 97
+  },
+  "measured_at": "2026-11-21 23:15:47"
+}

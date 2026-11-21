@@ -22,12 +22,19 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
     queue timeouts; each applied snapshot reconciles the worker's UNKNOWN jobs.
   - Runs (D-024): `create_run` (409 unless idle, one open run), `finish_run`, `list_runs`
     (open runs carry `elapsed_s`), `export_run`.
+- `playground.Playground(service)` (D-027, attached as `app.state.playground`): presets
+  (`SCENARIOS`), hands-on palette (`TASKS`), `start/stop` activities (tagged runs, block
+  "playground"), `submit_task`, `explain(job_id)` ("Why here?" card), `narrate(after_ts)` (story
+  feed), `live(after_ts)` (lanes per worker/slot with live stats, queue, scoreboard, compare),
+  `recover()` (closes an open playground run and cancels its jobs at startup). All
+  teacher-facing wording lives here.
 - `overview.compute(conn, now, run_id=None)` (D-022) and `runs.export_rows()/to_csv()`:
   read-only report helpers. `blobs.BlobStore(root).ensure(size)`: data_digest inputs.
 - Endpoints (admin = localhost or `X-Admin-Token`): `GET /health` (public), `/catalog`,
   `/workers[/{id}]`, `POST /workers/{id}/drain|enable`, `POST|GET /jobs`, `GET /jobs/{id}`,
   `POST /jobs/{id}/cancel`, `GET|PUT /scheduler`, `GET /events`, `/overview`, `/decisions`,
-  `POST /runs`, `GET /runs[/{id}]`, `POST /runs/{id}/finish`, `GET /runs/{id}/export?table=`.
+  `POST /runs`, `GET /runs[/{id}]`, `POST /runs/{id}/finish`, `GET /runs/{id}/export?table=`,
+  `GET /playground/scenarios|activity|live?after=|explain/{id}`, `POST /playground/activity|activity/stop|task`.
   Worker (bearer token): `POST /workers/register`, `POST /workers/{id}/heartbeat`,
   `GET /jobs/{id}/input` (assigned worker only; token checked before state).
 
@@ -41,7 +48,11 @@ handles registration and heartbeats, accepts jobs, places them. Implements plan 
 - Placement logic lives in scheduler/ (pure); the controller builds views and persists the
   outcome. Active scheduler config in the `scheduler_config` table, .env defaults (D-016).
 - A background task writes one telemetry_samples row per fresh worker every 5 s.
+- Live per-job stats from snapshots stay in memory (`WorkerRuntime.job_stats`); the job's slot
+  is stored (`jobs.slot`). New columns go in `db.MIGRATIONS` so old databases upgrade (D-028).
+- The playground never schedules: its jobs go through `service.submit` like any other.
 
 ## Test
 `.\.venv\Scripts\python -m pytest tests/integration` (M3 `test_scheduling.py`, M4 `test_reliability.py`
-and `test_e2e_m4.py`, M5 `test_dashboard_api.py`, M6 `test_runs_api.py`)
+and `test_e2e_m4.py`, M5 `test_dashboard_api.py`, M6 `test_runs_api.py`, playground
+`test_playground.py` + `tests/unit/test_playground_unit.py`)

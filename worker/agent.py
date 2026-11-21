@@ -36,7 +36,7 @@ from worker.workloads import IMPLEMENTED
 
 log = logging.getLogger("dwr.agent")
 
-AGENT_VERSION = "1.0.0-m4"
+AGENT_VERSION = "1.0.0-m7"
 REQUEST_TIMEOUT_S = 3.0
 # Input download: connect quickly, tolerate slow Wi-Fi between chunks.
 DOWNLOAD_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
@@ -208,8 +208,18 @@ class Agent:
             "agent_instance_id": self.instance_id,
             "seq": self.seq,
             "telemetry": t,
-            "jobs": [row_to_snapshot(r) for r in self.journal.snapshot_rows()],
+            "jobs": self._snapshot_with_stats(),
         }
+
+    def _snapshot_with_stats(self) -> list[dict]:
+        stats = self.supervisor.job_stats()
+        jobs = []
+        for r in self.journal.snapshot_rows():
+            s = row_to_snapshot(r)
+            if s["state"] == "RUNNING" and s["job_id"] in stats:
+                s.update(stats[s["job_id"]])
+            jobs.append(s)
+        return jobs
 
     def apply_reply(self, reply: HeartbeatReply) -> None:
         """Write every assignment to the journal before anything else (plan §5.3 step 1)."""

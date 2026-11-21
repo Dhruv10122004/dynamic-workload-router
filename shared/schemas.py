@@ -173,6 +173,9 @@ class JobSnapshot(BaseModel):
     kill_reason: str | None = None
     termination_verified: bool | None = None
     kill_latency_ms: float | None = None
+    # Live stats of a RUNNING job (optional; older agents omit them; D-028).
+    cpu_pct: float | None = None
+    rss_mb: float | None = None
 
 
 class Heartbeat(BaseModel):

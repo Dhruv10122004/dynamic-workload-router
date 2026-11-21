@@ -5,6 +5,11 @@ from `frontend/dist` on the same origin and polls `/api/v1` every 1 s. It shows 
 what the API returns.
 
 ## Public interface
+- `#Playground` (first tab; `#Playground/present` = presenter mode): activities, live lanes
+  per laptop/slot with real PID, cores, CPU%, RAM, the Cloud overflow queue, hands-on task
+  palette + custom builder, "Why here?" cards, story feed, scoreboard and comparison; reads
+  `/playground/*` (D-027). Arrival flash = a job that was in the queue on the previous poll.
+- `components/TaskForm.jsx`: catalog-driven job form shared by Submit and the Playground.
 - Views (hash routes): `#Overview` (GET /overview, /events), `#Workers` (GET /workers;
   drain/enable), `#Jobs` (GET /jobs?order=desc; cancel), `#Decisions` (GET /decisions),
   `#Submit` (form generated from GET /catalog; placement from /workers).

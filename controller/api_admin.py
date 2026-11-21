@@ -22,6 +22,23 @@ class RunCreate(BaseModel):
     config: dict = {}
 
 
+class PlaygroundStart(BaseModel):
+    """Start a preset scenario or a custom activity (DECISIONS D-027)."""
+    model_config = ConfigDict(extra="forbid")
+    scenario: str | None = None
+    custom: dict | None = None
+
+
+class PlaygroundTask(BaseModel):
+    """One hands-on task: a palette id, or a catalog type + params."""
+    model_config = ConfigDict(extra="forbid")
+    task_id: str | None = None
+    type: str | None = None
+    params: dict | None = None
+    placement: str = "auto"
+    count: int = 1
+
+
 class SchedulerUpdate(BaseModel):
     """PUT /scheduler body: any subset of the active settings."""
     model_config = ConfigDict(extra="forbid")
@@ -114,6 +131,45 @@ async def export_run(run_id: str, request: Request, table: str):
     """CSV of one table for this run: jobs | decisions | telemetry | events (plan §12.7)."""
     csv_text = request.app.state.service.export_run(run_id, table)
     return PlainTextResponse(csv_text, media_type="text/csv")
+
+
+@router.get("/playground/scenarios")
+async def playground_catalog(request: Request):
+    return request.app.state.playground.catalog()
+
+
+@router.get("/playground/activity")
+async def playground_activity(request: Request):
+    return request.app.state.playground.activity()
+
+
+@router.post("/playground/activity")
+async def playground_start(body: PlaygroundStart, request: Request):
+    """409 while another activity runs or jobs are in flight."""
+    return await request.app.state.playground.start(scenario=body.scenario, custom=body.custom)
+
+
+@router.post("/playground/activity/stop")
+async def playground_stop(request: Request):
+    return await request.app.state.playground.stop()
+
+
+@router.post("/playground/task")
+async def playground_task(body: PlaygroundTask, request: Request):
+    """Submit one hands-on task (count 1-10); returns each job's first 'Why here?' card."""
+    return await request.app.state.playground.submit_task(task_id=body.task_id, type_=body.type, params=body.params,
+                                                          placement=body.placement, count=body.count)
+
+
+@router.get("/playground/explain/{job_id}")
+async def playground_explain(job_id: str, request: Request):
+    return request.app.state.playground.explain(job_id)
+
+
+@router.get("/playground/live")
+async def playground_live(request: Request, after: float = 0.0):
+    """Everything the Playground view needs, for a 1 s poll; `after` = story-feed cursor."""
+    return request.app.state.playground.live(after)
 
 
 @router.get("/overview")

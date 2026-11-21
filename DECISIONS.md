@@ -317,3 +317,42 @@ Decision:
 Alternatives rejected: shorter heartbeat interval (more load, still a poll); keeping exec_s
 as the basis (makes the low end of the load sweep meaningless). Owner to confirm the basis.
 Plan §: 4, 6.4, 12.2. Amends D-025 (capacity definition).
+
+### D-027 (2026-11-21, playground) Classroom playground semantics
+Context: the owner asked for a classroom view where a teacher starts activities or single
+tasks and watches real jobs on both laptops, with a "Cloud" part shown as a queue the
+laptops pick from. Not part of PROJECT_PLAN_V1 (supports the M7 demo); plan not edited.
+Decision:
+- The "Cloud overflow queue" is the controller's real PENDING queue, labelled as the work a
+  Cloud tier would receive in V2; no simulated cloud worker. Laptops pick from it through the
+  normal scheduler (inline on the freeing heartbeat, D-026).
+- A job running on a laptop that drops off stays UNKNOWN on that laptop ("offline: still
+  running there, result pending") and is never re-queued: at-most-once (invariant 7),
+  confirmed by the owner. Jobs assigned but never delivered are redelivered (D-021).
+- Activities and hands-on tasks are tagged runs (block "playground"); jobs go through
+  `service.submit`. One activity at a time (409 otherwise). The first hands-on click when idle
+  opens a "free play" run. A restart closes an open playground run and cancels its
+  unfinished jobs, so a class never inherits old work.
+- Presets: Quiet day, Edge saturates, Rush hour, Without Fog (same seed as Edge saturates, for
+  a fair comparison), Fog gets busy, Both laptops busy, Fog disconnects (timed cue cards; the
+  Wi-Fi is switched by hand), Cancel a long job (30 s: mem_touch's hold limit). Load levels use
+  experiments/reference.json, else built-in mains timings.
+- Fog stress comes from `stress.py --follow-runs --block playground` on the Fog laptop; Edge
+  stress for "Both laptops busy" is a subprocess the runner starts and kills. Under it the
+  controller laptop itself is at ~85% CPU (it is the Edge laptop): the UI gets slower.
+- All teacher-facing wording (story feed, "Why here?" cards, labels, reason texts) is built
+  by controller/playground.py, so `frontend/src` still holds no tier names (AC-5.1).
+Alternatives rejected: re-queueing an interrupted job (could run twice); a fake cloud
+worker (would invent results); browser-side activity timing (stops when the tab closes).
+
+### D-028 (2026-11-21, playground) Live per-job stats and the job's slot
+Context: the playground shows each running job's slot, cores, CPU% and RAM.
+Decision: `JobSnapshot` gains optional `cpu_pct` (tree CPU, 100 = one core) and `rss_mb`,
+sampled by the supervisor's 250 ms watchdog pass and sent for RUNNING jobs. They are optional
+and unknown fields are ignored, so old and new agents/controllers interoperate and
+SCHEMA_VERSION stays 1. The controller keeps them in memory only (`WorkerRuntime.job_stats`):
+live values, not records. The slot the agent already reported is now stored in a new
+nullable `jobs.slot` column; `Database()` adds missing columns to an existing file
+(`MIGRATIONS`). Agent version 1.0.0-m7. Job processes validate with check_params (D-026).
+Alternatives rejected: persisting live stats (noise in the source of truth); computing CPU
+on the controller (it never talks to workers).

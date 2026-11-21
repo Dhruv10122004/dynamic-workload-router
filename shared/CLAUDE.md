@@ -16,6 +16,10 @@ wire schemas and job validation. Implements plan §4, §6.2, §8 (schemas).
   (worker side). Pydantic wire models: `JobSubmit`, `RegisterRequest/Reply`, `Heartbeat`,
   `Telemetry`, `JobSnapshot`, `Assignment`, `HeartbeatReply`.
 - `envfile.py`: `load_env(path | "-" | None) -> dict` (real `DWR_*` env vars win).
+- `traces.py`: job sizes (`VARIANTS`), `MIXES`, `variant_key`, `mean_time`,
+  `capacity_jobs_per_s`, seeded `generate(...)`; used by experiments/gen_trace.py and the
+  playground (D-025, D-026).
+- `JobSnapshot` has optional live `cpu_pct` / `rss_mb` (D-028; optional, so no version bump).
 
 ## Rules
 - Pure: no network, no database, no filesystem writes (envfile only reads).

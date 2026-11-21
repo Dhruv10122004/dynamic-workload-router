@@ -1,18 +1,22 @@
 import { useState } from 'react';
 import { getToken, setToken, usePoll } from './api.js';
+import Playground from './views/Playground.jsx';
 import Overview from './views/Overview.jsx';
 import Workers from './views/Workers.jsx';
 import Jobs from './views/Jobs.jsx';
 import Decisions from './views/Decisions.jsx';
 import Submit from './views/Submit.jsx';
 
-const VIEWS = { Overview, Workers, Jobs, Decisions, Submit };
+const VIEWS = { Playground, Overview, Workers, Jobs, Decisions, Submit };
+
+// '#Playground/present' = presenter mode: large type, no navigation (projector).
 
 export default function App() {
   const [view, setView] = useState(() => {
-    const h = window.location.hash.slice(1);
-    return VIEWS[h] ? h : 'Overview';
+    const h = window.location.hash.slice(1).split('/')[0];
+    return VIEWS[h] ? h : 'Playground';
   });
+  const present = view === 'Playground' && window.location.hash.endsWith('/present');
   const health = usePoll('/health');
   const sched = usePoll('/scheduler', 5000);
   const [token, setTok] = useState(getToken());
@@ -22,10 +26,10 @@ export default function App() {
   const stale = health.error && health.data;
 
   return (
-    <div className="app">
+    <div className={`app ${present ? 'present' : ''}`}>
       <header className="bar">
         <div className="brand">Dynamic Workload Router</div>
-        <nav>
+        <nav hidden={present}>
           {Object.keys(VIEWS).map((v) => (
             <button key={v} className={v === view ? 'tab on' : 'tab'} onClick={() => go(v)}>{v}</button>
           ))}
@@ -44,7 +48,7 @@ export default function App() {
               {sched.data.policy} · host-busy {sched.data.host_busy_enabled ? 'on' : 'off'}
             </span>
           )}
-          <input className="token" type="password" placeholder="admin token (remote only)" value={token}
+          <input hidden={present} className="token" type="password" placeholder="admin token (remote only)" value={token}
                  onChange={(e) => { setTok(e.target.value); setToken(e.target.value); }} />
         </div>
       </header>
