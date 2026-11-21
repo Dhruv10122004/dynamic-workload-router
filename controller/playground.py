@@ -159,6 +159,7 @@ class Activity:
     task: asyncio.Task | None = None
     stress_proc: subprocess.Popen | None = None
     finished: bool = False
+    finished_ts: float | None = None
 
 
 class Playground:
@@ -195,7 +196,8 @@ class Playground:
             hint = f"≈ {exp:.1f} s on Edge" if exp else (
                 f"≈ {t['params']['hold_s']:g} s" if "hold_s" in t["params"] else "")
             tasks.append({**t, "hint": hint})
-        return {"scenarios": [{k: s.get(k) for k in ("id", "title", "watch", "policy", "load", "duration_s", "needs")}
+        return {"scenarios": [{**{k: s.get(k) for k in ("id", "title", "watch", "policy", "load", "duration_s", "needs")},
+                               "needs_short": "needs the stress helper on Fog" if s.get("needs") else None}
                               for s in SCENARIOS],
                 "tasks": tasks, "labels": LABELS, "custom_limits": CUSTOM_LIMITS,
                 "policies": sorted(POLICY_TEXT), "mixes": ["cpu", "mem", "data", "mixed"],
@@ -251,6 +253,7 @@ class Playground:
     async def _close(self, a: Activity) -> None:
         self._kill_stress(a)
         a.finished = True
+        a.finished_ts = a.finished_ts or time.time()
         await self.service.finish_run(a.run_id)
         self.last = a
         if self.active is a:
@@ -382,6 +385,7 @@ class Playground:
 
         self._finisher = asyncio.create_task(finish_when_quiet())
         a.finished = True
+        a.finished_ts = time.time()
         return self.activity()
 
     # ------------------------------------------------------------ hands-on tasks
@@ -575,7 +579,7 @@ class Playground:
         a = self.active or self.last
         if a is None:
             return None
-        elapsed = time.time() - a.started_ts
+        elapsed = (a.finished_ts or time.time()) - a.started_ts   # frozen once the activity ends
         cue = next((c for c in a.cues if c["at_s"] <= elapsed < c["at_s"] + c.get("for_s", 15)), None)
         return {"run_id": a.run_id, "kind": a.kind, "title": a.title, "watch": a.watch, "policy": a.policy,
                 "policy_text": POLICY_TEXT.get(a.policy, a.policy), "running": not a.finished,

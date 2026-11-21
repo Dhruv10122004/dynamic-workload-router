@@ -4,6 +4,8 @@ All CPU figures are normalised to the whole host (0-100).
 """
 from __future__ import annotations
 
+import time
+
 import psutil
 
 
@@ -14,16 +16,21 @@ def foreign_cpu_pct(host_cpu_pct: float, own_cpu_pct: float) -> float:
 class TelemetrySampler:
     def __init__(self) -> None:
         self._ncpu = psutil.cpu_count() or 1
-        self._procs: dict[tuple[int, float], psutil.Process] = {}
+        self._cpu_s: dict[tuple[int, float], float] = {}   # (pid, create_time) -> CPU seconds at last sample
+        self._last = time.time()
         psutil.cpu_percent(interval=None)  # prime: the first reading is meaningless
 
     def own_cpu_pct(self, roots: list[psutil.Process]) -> float:
-        """Sum of CPU% over every process in each job's tree, normalised to the host.
+        """CPU used by every process of every job tree since the previous sample, normalised to
+        the host (DECISIONS D-029).
 
-        psutil's per-process cpu_percent() is a delta since the previous call on the same
-        Process object, so objects are cached by (pid, create_time)."""
-        seen: dict[tuple[int, float], psutil.Process] = {}
-        total = 0.0
+        Measured from CPU-time deltas, not psutil's per-object cpu_percent(): that returns 0 the
+        first time it sees a process, so a job lasting about one heartbeat was mostly invisible
+        and its CPU was counted as *foreign*. A process created since the last sample counts in
+        full (all its CPU time falls inside the interval)."""
+        now = time.time()
+        seen: dict[tuple[int, float], float] = {}
+        used = 0.0
         for root in roots:
             try:
                 tree = [root, *root.children(recursive=True)]
@@ -31,18 +38,20 @@ class TelemetrySampler:
                 continue
             for p in tree:
                 try:
-                    key = (p.pid, p.create_time())
-                    cached = self._procs.get(key)
-                    if cached is None:
-                        cached = p
-                        cached.cpu_percent(interval=None)  # prime; counts from next sample
-                    else:
-                        total += cached.cpu_percent(interval=None)
-                    seen[key] = cached
+                    created = p.create_time()
+                    t = p.cpu_times()
+                    total = t.user + t.system
                 except psutil.Error:
                     continue
-        self._procs = seen
-        return min(100.0, total / self._ncpu)
+                key = (p.pid, created)
+                prev = self._cpu_s.get(key)
+                if prev is None:
+                    prev = 0.0 if created >= self._last - 0.05 else total   # older but unseen: no baseline
+                used += max(0.0, total - prev)
+                seen[key] = total
+        interval = max(1e-3, now - self._last)
+        self._cpu_s, self._last = seen, now
+        return min(100.0, 100.0 * used / (interval * self._ncpu))
 
     def sample(self, roots: list[psutil.Process]) -> dict:
         own = self.own_cpu_pct(roots)

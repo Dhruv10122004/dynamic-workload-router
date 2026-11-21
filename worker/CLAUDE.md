@@ -31,7 +31,8 @@ verified termination), restart recovery, telemetry.
   `find_job_processes(jobs_dir)`.
 - `agent.Agent.fetch_input`: streams `input_url` from the controller (separate httpx
   client), verifies size + sha256, returns `transfer_bytes`, `transfer_s`.
-- `telemetry.py`: `TelemetrySampler().sample(roots)`, `foreign_cpu_pct(host, own)`.
+- `telemetry.py`: `TelemetrySampler().sample(roots)` (own CPU from CPU-time deltas, D-029),
+  `foreign_cpu_pct(host, own)`.
 
 ## Rules
 - Never listen on a port; only call the controller.
@@ -48,4 +49,4 @@ verified termination), restart recovery, telemetry.
 - Never spawn a job twice: the journal row and the `spawns` row are one transaction.
 
 ## Test
-`.\.venv\Scripts\python -m pytest tests/unit/test_journal.py tests/unit/test_supervisor.py tests/unit/test_supervisor_m4.py tests/unit/test_agent.py tests/unit/test_workloads_m2.py`
+`.\.venv\Scripts\python -m pytest tests/unit/test_telemetry.py tests/unit/test_journal.py tests/unit/test_supervisor.py tests/unit/test_supervisor_m4.py tests/unit/test_agent.py tests/unit/test_workloads_m2.py`

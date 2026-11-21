@@ -7,6 +7,7 @@ import { ErrorLine, Stat } from './common.jsx';
 // /api/v1/playground/*; this file only lays them out and animates arrivals.
 
 const FLASH_MS = 3500;
+const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
 
 function useLive() {
   const [state, setState] = useState({ data: null, feed: [], error: null });
@@ -34,9 +35,65 @@ function useLive() {
   return state;
 }
 
-function ActivityBar({ catalog, activity, onError }) {
+function Now({ catalog, activity, onStart, onStop }) {
   const [custom, setCustom] = useState({ load: 1.5, mix: 'mixed', policy: 'LocalFirst', duration_s: 60 });
   const [showCustom, setShowCustom] = useState(false);
+  const running = activity && activity.running;
+  const lim = catalog.custom_limits;
+  const pct = activity && activity.total ? (100 * activity.submitted) / activity.total : 0;
+  return (
+    <div className="now">
+      <div className="now-head">
+        <span className="eyebrow">{running ? 'Running now' : activity ? 'Last activity' : 'No activity yet'}</span>
+        {running && <button className="btn danger" onClick={onStop}>Stop</button>}
+      </div>
+      {activity ? (
+        <>
+          <div className="now-title">{activity.title}</div>
+          <div className="now-policy">{activity.policy_text}</div>
+          <div className="now-watch">{activity.watch}</div>
+          {activity.total > 0 && (
+            <div className="progress" title="jobs submitted so far">
+              <div style={{ width: `${pct}%` }} />
+              <span>{activity.submitted}/{activity.total} jobs ·{' '}
+                {running ? `${fmtNum(activity.elapsed_s, 0)} s${activity.duration_s ? ` of ${activity.duration_s} s` : ''}`
+                  : `finished · took ${fmtNum(activity.elapsed_s, 0)} s`}</span>
+            </div>
+          )}
+        </>
+      ) : <div className="now-watch">Pick an activity on the left, or launch single tasks below.</div>}
+      {activity && activity.cue && <div className="cue">{activity.cue}</div>}
+      <button className="btn ghost wide" onClick={() => setShowCustom(!showCustom)}>
+        {showCustom ? 'Hide custom activity' : 'Custom activity…'}
+      </button>
+      {showCustom && (
+        <div className="custom">
+          <label>Load <b>{custom.load}×</b>
+            <input type="range" min={lim.load[0]} max={lim.load[1]} step="0.25" value={custom.load}
+                   onChange={(e) => setCustom({ ...custom, load: parseFloat(e.target.value) })} />
+          </label>
+          <label>Duration <b>{custom.duration_s} s</b>
+            <input type="range" min={lim.duration_s[0]} max={lim.duration_s[1]} step="10" value={custom.duration_s}
+                   onChange={(e) => setCustom({ ...custom, duration_s: parseInt(e.target.value, 10) })} />
+          </label>
+          <label>Job mix
+            <select value={custom.mix} onChange={(e) => setCustom({ ...custom, mix: e.target.value })}>
+              {catalog.mixes.map((m) => <option key={m}>{m}</option>)}
+            </select>
+          </label>
+          <label>Policy
+            <select value={custom.policy} onChange={(e) => setCustom({ ...custom, policy: e.target.value })}>
+              {catalog.policies.map((p) => <option key={p}>{p}</option>)}
+            </select>
+          </label>
+          <button className="btn primary wide" disabled={running} onClick={() => onStart({ custom })}>Start custom</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Activities({ catalog, activity, onError }) {
   const running = activity && activity.running;
   const start = async (body) => {
     try { await api('/playground/activity', { method: 'POST', body }); onError(null); } catch (e) { onError(e.message); }
@@ -44,59 +101,25 @@ function ActivityBar({ catalog, activity, onError }) {
   const stop = async () => {
     try { await api('/playground/activity/stop', { method: 'POST' }); } catch (e) { onError(e.message); }
   };
-  const lim = catalog.custom_limits;
   return (
-    <div className="panel">
-      <div className="pg-row">
+    <div className="panel activities">
+      <div className="presets">
         <h3>Activities</h3>
-        {running && <button className="stop" onClick={stop}>■ stop “{activity.title}”</button>}
-        <button className="small" onClick={() => setShowCustom(!showCustom)}>{showCustom ? 'hide custom' : 'custom…'}</button>
-      </div>
-      <div className="scenarios">
-        {catalog.scenarios.map((s) => (
-          <button key={s.id} className={`scenario ${activity && activity.title === s.title && running ? 'on' : ''}`}
-                  disabled={running} onClick={() => start({ scenario: s.id })} title={s.needs || ''}>
-            <b>{s.title}</b>
-            <span>{s.watch}</span>
-            {s.needs && <em>needs: {s.needs}</em>}
-          </button>
-        ))}
-      </div>
-      {showCustom && (
-        <div className="custom">
-          <label>load × capacity: <b>{custom.load}</b>
-            <input type="range" min={lim.load[0]} max={lim.load[1]} step="0.25" value={custom.load}
-                   onChange={(e) => setCustom({ ...custom, load: parseFloat(e.target.value) })} />
-          </label>
-          <label>mix
-            <select value={custom.mix} onChange={(e) => setCustom({ ...custom, mix: e.target.value })}>
-              {catalog.mixes.map((m) => <option key={m}>{m}</option>)}
-            </select>
-          </label>
-          <label>policy
-            <select value={custom.policy} onChange={(e) => setCustom({ ...custom, policy: e.target.value })}>
-              {catalog.policies.map((p) => <option key={p}>{p}</option>)}
-            </select>
-          </label>
-          <label>duration: <b>{custom.duration_s} s</b>
-            <input type="range" min={lim.duration_s[0]} max={lim.duration_s[1]} step="10" value={custom.duration_s}
-                   onChange={(e) => setCustom({ ...custom, duration_s: parseInt(e.target.value, 10) })} />
-          </label>
-          <button disabled={running} onClick={() => start({ custom })}>start custom</button>
+        <div className="preset-grid">
+          {catalog.scenarios.map((s) => {
+            const on = running && activity.title === s.title;
+            return (
+              <button key={s.id} className={`preset ${on ? 'on' : ''}`} disabled={running} title={s.watch}
+                      onClick={() => start({ scenario: s.id })}>
+                <span className="preset-title">{s.title}</span>
+                <span className="preset-text">{s.watch}</span>
+                {s.needs && <span className="tag" title={s.needs}>{s.needs_short}</span>}
+              </button>
+            );
+          })}
         </div>
-      )}
-      {activity && (
-        <div className="activity">
-          <div><b>{activity.title}</b> · {activity.policy_text}{running ? '' : ' · finished'}</div>
-          <div className="dim">{activity.watch}</div>
-          {activity.total > 0 && (
-            <div className="bar"><div style={{ width: `${(100 * activity.submitted) / activity.total}%` }} />
-              <span>{activity.submitted}/{activity.total} jobs submitted · {fmtNum(activity.elapsed_s, 0)} s
-                {activity.duration_s ? ` of ${activity.duration_s} s` : ''}</span></div>
-          )}
-        </div>
-      )}
-      {activity && activity.cue && <div className="cue">{activity.cue}</div>}
+      </div>
+      <Now catalog={catalog} activity={activity} onStart={start} onStop={stop} />
     </div>
   );
 }
@@ -109,9 +132,10 @@ function JobTile({ t, flash, onWhy }) {
   };
   return (
     <div className={`tile ${t.offline ? 'offline' : ''} ${flash ? 'flash' : ''}`} onClick={() => onWhy(t.job_id)}>
-      <div className="tile-head"><b>#{t.n}</b> {t.label}
+      <div className="tile-head">
+        <span className="tile-n">#{t.n}</span><span className="tile-label">{t.label}</span>
         {!t.offline && !t.cancel_requested && t.state === 'RUNNING' &&
-          <button className="small cancel" onClick={cancel}>cancel</button>}
+          <button className="btn tiny danger" onClick={cancel}>cancel</button>}
       </div>
       {t.offline ? <div className="offline-text">{t.offline_text}</div> : (
         <>
@@ -137,19 +161,21 @@ function JobTile({ t, flash, onWhy }) {
 
 function WorkerCard({ w, flashes, labels, onWhy }) {
   return (
-    <div className={`pg-worker ${w.fresh ? '' : 'is-stale'} ${w.host_busy ? 'is-busy' : ''}`}>
+    <div className={`pg-card ${w.fresh ? '' : 'is-stale'} ${w.host_busy ? 'is-busy' : ''}`}>
       <div className="card-head">
         <span className="wid">{w.worker_id}</span><span className="tier">{w.tier}</span>
-        {w.fresh ? <span className="badge good">online</span> : <span className="badge bad">STALE</span>}
-        {w.host_busy && <span className="badge warn">HOST BUSY</span>}
-        {w.draining && <span className="badge warn">DRAINING</span>}
+        <span className="badges">
+          {w.fresh ? <span className="badge good">online</span> : <span className="badge bad">STALE</span>}
+          {w.host_busy && <span className="badge warn">HOST BUSY</span>}
+          {w.draining && <span className="badge warn">DRAINING</span>}
+        </span>
       </div>
       <div className="sub">{w.hostname} · {w.os} · CPU {fmtNum(w.cpu_pct, 0)}% · RAM {fmtNum(w.mem_pct, 0)}%
         {!w.fresh && w.heartbeat_age_s != null && <span className="bad-text"> · no heartbeat for {fmtNum(w.heartbeat_age_s, 0)} s</span>}
       </div>
       {w.slots.map((s) => (
         <div key={s.slot} className="lane">
-          <div className="lane-label">slot {s.slot}<br /><span className="dim">core {s.cpus.join('+')}</span></div>
+          <div className="lane-label">slot {s.slot}<span>core {s.cpus.join('+')}</span></div>
           {s.job ? <JobTile t={{ ...s.job, offline_text: labels.offline_tile }} flash={flashes[s.job.job_id]} onWhy={onWhy} />
             : <div className="idle">idle</div>}
         </div>
@@ -163,21 +189,23 @@ function WorkerCard({ w, flashes, labels, onWhy }) {
   );
 }
 
-function QueueColumn({ queue, labels, board, onWhy }) {
+function QueueCard({ queue, labels, board, onWhy }) {
   return (
-    <div className="pg-queue">
+    <div className="pg-card queue">
       <div className="card-head"><span className="wid">{labels.queue_title}</span>
-        <span className="badge">{queue.length} waiting</span></div>
+        <span className="badges"><span className={`badge ${queue.length ? 'warn' : ''}`}>{queue.length} waiting</span></span></div>
       <div className="sub">{labels.queue_note}</div>
-      {board && <div className="demand">{labels.demand_label}: <b>{fmtNum(board.overflow_demand_s, 1)} s</b> · {board.overflow_jobs} jobs had to wait</div>}
-      {queue.length === 0 && <div className="idle">{labels.queue_empty}</div>}
-      <div className="chips">
-        {queue.map((q) => (
-          <div key={q.job_id} className="chip" onClick={() => onWhy(q.job_id)}>
-            <b>#{q.n}</b> {q.label} <span className="dim">waiting {fmtNum(q.waiting_s, 0)} s</span>
-          </div>
-        ))}
-      </div>
+      {board && <div className="demand">{labels.demand_label}: <b>{fmtNum(board.overflow_demand_s, 1)} s</b>
+        <span className="dim"> · {board.overflow_jobs} jobs had to wait</span></div>}
+      {queue.length === 0 ? <div className="idle">{labels.queue_empty}</div> : (
+        <div className="chips">
+          {queue.map((q) => (
+            <div key={q.job_id} className="chip" onClick={() => onWhy(q.job_id)}>
+              <span><b>#{q.n}</b> {q.label}</span><span className="dim">{fmtNum(q.waiting_s, 0)} s</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -187,9 +215,9 @@ function WhyCard({ jobId, onClose }) {
   if (!data) return null;
   return (
     <div className={`why ${data.clicked ? 'clicked' : ''}`}>
-      <button className="small close" onClick={() => onClose(jobId)}>×</button>
+      <button className="btn tiny ghost close" onClick={() => onClose(jobId)} aria-label="close">×</button>
       <div className="why-head">{data.headline}</div>
-      <ul>{data.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+      {data.lines.length > 0 && <ul>{data.lines.map((l) => <li key={l}>{l}</li>)}</ul>}
       <div className="timeline">{data.timeline.map((e) => (
         <span key={`${e.t}${e.state}`} className={`state ${e.state}`}>{e.state} +{e.t}s</span>
       ))}</div>
@@ -197,7 +225,7 @@ function WhyCard({ jobId, onClose }) {
   );
 }
 
-function TaskPalette({ tasks, onLaunched, onError }) {
+function TaskPanel({ tasks, why, onLaunched, onClose, onError }) {
   const [custom, setCustom] = useState(false);
   const launch = async (body) => {
     const r = await api('/playground/task', { method: 'POST', body });
@@ -207,53 +235,85 @@ function TaskPalette({ tasks, onLaunched, onError }) {
     try { await launch({ task_id: id }); onError(null); } catch (e) { onError(e.message); }
   };
   return (
-    <div className="panel">
-      <div className="pg-row"><h3>Launch a task yourself</h3>
-        <button className="small" onClick={() => setCustom(!custom)}>{custom ? 'hide builder' : 'custom task…'}</button></div>
+    <div className="panel col">
+      <h3>Launch a task</h3>
       <div className="palette">
         {tasks.map((t) => (
-          <button key={t.id} onClick={() => click(t.id)}><b>{t.label}</b><span>{t.hint}</span></button>
+          <button key={t.id} className="btn task" onClick={() => click(t.id)}>
+            <span className="task-label">{t.label}</span><span className="task-hint">{t.hint}</span>
+          </button>
         ))}
       </div>
+      <button className="btn ghost wide" onClick={() => setCustom(!custom)}>{custom ? 'Hide task builder' : 'Build a custom task…'}</button>
       {custom && (
         <div className="builder">
-          <TaskForm maxCount={10} showTimeout={false} submitLabel="launch"
+          <TaskForm maxCount={10} showTimeout={false} submitLabel="Launch"
                     onSubmit={({ type, params, placement, count }) => launch({ type, params, placement, count })} />
+        </div>
+      )}
+      {why.length > 0 ? <div className="whys">{why.map((j) => <WhyCard key={j} jobId={j} onClose={onClose} />)}</div>
+        : <div className="hint">Click a task, a tile or a queued job to see why it went where it did.</div>}
+    </div>
+  );
+}
+
+function Story({ feed, onWhy }) {
+  const box = useRef(null);
+  useEffect(() => {          // keep the newest line in view without scrolling the page
+    if (box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [feed.length]);
+  return (
+    <div className="panel col">
+      <h3>What is happening</h3>
+      <div className="feed" ref={box}>
+        {feed.length === 0 && <div className="hint">Nothing yet: start an activity or launch a task.</div>}
+        {feed.map((f, i) => (
+          <div key={`${f.ts}-${i}`} className={`feed-line ${f.job_id ? 'link' : 'event'}`}
+               onClick={() => f.job_id && onWhy([f.job_id])}>
+            <span className="time">{clock(f.ts)}</span><span>{f.text}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Tally({ board }) {
+  return (
+    <div className="panel col">
+      <h3>This activity</h3>
+      {!board ? <div className="hint">Numbers appear once an activity or task runs.</div> : (
+        <div className="tally-grid">
+          <Stat label="completed" value={`${board.completed}/${board.total}`} />
+          {Object.entries(board.tiers).map(([tier, v]) => <Stat key={tier} label={`done on ${tier}`} value={v.completed} />)}
+          <Stat label="offloaded" value={board.offload_pct == null ? '–' : `${board.offload_pct}%`} />
+          <Stat label="waiting now" value={board.waiting} />
+          <Stat label="longest queue" value={board.peak_queue} />
+          <Stat label="95% finished within" value={board.p95_s == null ? '–' : `${board.p95_s} s`} />
+          <Stat label="failed / killed" value={board.failed} />
         </div>
       )}
     </div>
   );
 }
 
-function Scoreboard({ board, compare }) {
-  if (!board) return null;
+function Compare({ compare }) {
+  if (compare.length < 2) return null;
   return (
     <div className="panel">
-      <h3>This activity</h3>
-      <div className="stats">
-        <Stat label="jobs" value={board.total} />
-        <Stat label="completed" value={board.completed} />
-        {Object.entries(board.tiers).map(([tier, v]) => <Stat key={tier} label={`done on ${tier}`} value={v.completed} />)}
-        <Stat label="offloaded (%)" value={board.offload_pct == null ? '–' : board.offload_pct} />
-        <Stat label="waiting now" value={board.waiting} />
-        <Stat label="longest queue" value={board.peak_queue} />
-        <Stat label="95% finished within" value={board.p95_s == null ? '–' : `${board.p95_s} s`} />
-        <Stat label="failed / killed" value={board.failed} />
+      <h3>Compare recent activities</h3>
+      <div className="scroll">
+        <table className="grid">
+          <thead><tr><th>activity</th><th>policy</th><th className="num">jobs</th><th className="num">95% within</th>
+            <th className="num">had to wait</th><th className="num">queue demand</th><th className="num">offloaded</th></tr></thead>
+          <tbody>{compare.map((c) => (
+            <tr key={c.run_id}><td>{c.title}</td><td>{c.policy}</td><td className="num">{c.completed}/{c.total}</td>
+              <td className="num">{c.p95_s == null ? '–' : `${c.p95_s} s`}</td><td className="num">{c.overflow_jobs}</td>
+              <td className="num">{fmtNum(c.overflow_demand_s, 1)} s</td>
+              <td className="num">{c.offload_pct == null ? '–' : `${c.offload_pct}%`}</td></tr>
+          ))}</tbody>
+        </table>
       </div>
-      {compare.length > 1 && (
-        <>
-          <h3 style={{ marginTop: 12 }}>Compare recent activities</h3>
-          <table>
-            <thead><tr><th>activity</th><th>policy</th><th>jobs</th><th>95% within</th><th>had to wait</th>
-              <th>queue demand s</th><th>offloaded %</th></tr></thead>
-            <tbody>{compare.map((c) => (
-              <tr key={c.run_id}><td>{c.title}</td><td>{c.policy}</td><td>{c.completed}/{c.total}</td>
-                <td>{c.p95_s == null ? '–' : `${c.p95_s} s`}</td><td>{c.overflow_jobs}</td>
-                <td>{fmtNum(c.overflow_demand_s, 1)}</td><td>{c.offload_pct ?? '–'}</td></tr>
-            ))}</tbody>
-          </table>
-        </>
-      )}
     </div>
   );
 }
@@ -265,7 +325,6 @@ export default function Playground() {
   const [msg, setMsg] = useState(null);
   const [flashes, setFlashes] = useState({});   // job_id -> true while the arrival flash shows
   const prevQueue = useRef(new Set());
-  const feedEnd = useRef(null);
 
   useEffect(() => {
     if (!data) return undefined;
@@ -273,49 +332,37 @@ export default function Playground() {
     const arrived = inSlots.filter((t) => prevQueue.current.has(t.job_id)).map((t) => t.job_id);
     prevQueue.current = new Set(data.queue.map((q) => q.job_id));
     if (!arrived.length) return undefined;
-    const id = setTimeout(() => {
+    const on = setTimeout(() => {
       setFlashes((f) => ({ ...f, ...Object.fromEntries(arrived.map((j) => [j, true])) }));
     }, 0);
     const off = setTimeout(() => {
       setFlashes((f) => Object.fromEntries(Object.entries(f).filter(([j]) => !arrived.includes(j))));
     }, FLASH_MS);
-    return () => { clearTimeout(id); clearTimeout(off); };
+    return () => { clearTimeout(on); clearTimeout(off); };
   }, [data]);
 
-  useEffect(() => { feedEnd.current?.scrollIntoView({ block: 'nearest' }); }, [feed.length]);
-
-  const openWhy = (ids) => setWhy((w) => [...ids, ...w.filter((x) => !ids.includes(x))].slice(0, 6));
+  const openWhy = (ids) => setWhy((w) => [...ids, ...w.filter((x) => !ids.includes(x))].slice(0, 4));
   const closeWhy = (id) => setWhy((w) => w.filter((x) => x !== id));
 
-  if (!catalog.data || !data) return <section><ErrorLine error={catalog.error || error} /><div className="dim">loading…</div></section>;
+  if (!catalog.data || !data) {
+    return <section><ErrorLine error={catalog.error || error} /><div className="hint">Loading…</div></section>;
+  }
   return (
     <section className="playground">
       <ErrorLine error={error || msg} />
-      <ActivityBar catalog={catalog.data} activity={data.activity} onError={setMsg} />
+      <Activities catalog={catalog.data} activity={data.activity} onError={setMsg} />
       <div className="stage">
         {data.workers.map((w) => (
           <WorkerCard key={w.worker_id} w={w} flashes={flashes} labels={data.labels} onWhy={(j) => openWhy([j])} />
         ))}
-        <QueueColumn queue={data.queue} labels={data.labels} board={data.scoreboard} onWhy={(j) => openWhy([j])} />
+        <QueueCard queue={data.queue} labels={data.labels} board={data.scoreboard} onWhy={(j) => openWhy([j])} />
       </div>
-      <div className="pg-bottom">
-        <div>
-          <TaskPalette tasks={catalog.data.tasks} onLaunched={openWhy} onError={setMsg} />
-          {why.length > 0 && <div className="whys">{why.map((j) => <WhyCard key={j} jobId={j} onClose={closeWhy} />)}</div>}
-        </div>
-        <div className="panel story">
-          <h3>What is happening</h3>
-          <div className="feed">
-            {feed.map((f, i) => (
-              <div key={`${f.ts}-${i}`} className="feed-line" onClick={() => f.job_id && openWhy([f.job_id])}>
-                <span className="dim">{new Date(f.ts * 1000).toLocaleTimeString()}</span> {f.text}
-              </div>
-            ))}
-            <div ref={feedEnd} />
-          </div>
-        </div>
+      <div className="pg-cols">
+        <TaskPanel tasks={catalog.data.tasks} why={why} onLaunched={openWhy} onClose={closeWhy} onError={setMsg} />
+        <Story feed={feed} onWhy={openWhy} />
+        <Tally board={data.scoreboard} />
       </div>
-      <Scoreboard board={data.scoreboard} compare={data.compare} />
+      <Compare compare={data.compare} />
     </section>
   );
 }

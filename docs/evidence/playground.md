@@ -58,3 +58,11 @@ SUCCEEDED), then "#96 … picked from the queue by fog-1 after 13.5 s", #99, #10
   now cancels them (test added).
 - Under "Both laptops busy" the controller laptop itself runs at ~85% CPU (it is Edge); one
   monitoring request was reset once. Documented in D-027.
+
+## Layout clean-up (2026-11-22)
+A `.bar` class added for the activity progress bar clashed with the page header's `.bar`, which
+squeezed the header to 18 px on every tab. Fixed and restructured: preset grid + "Running now"
+panel, even three-column lower area, 2×4 activity numbers, one button style, frozen elapsed time
+after an activity ends. Checked at 1366 px and 1920 px (`img/playground-layout-1366.png`).
+The Workers view also exposed D-029: own (job) CPU read ~0 and was counted as foreign; fixed
+(fog-1 under load: host 52%, own 50%, foreign 2%).

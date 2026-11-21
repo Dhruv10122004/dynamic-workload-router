@@ -356,3 +356,15 @@ nullable `jobs.slot` column; `Database()` adds missing columns to an existing fi
 (`MIGRATIONS`). Agent version 1.0.0-m7. Job processes validate with check_params (D-026).
 Alternatives rejected: persisting live stats (noise in the source of truth); computing CPU
 on the controller (it never talks to workers).
+
+### D-029 (2026-11-21, playground) Own CPU from CPU-time deltas
+Context: the agent's `own_cpu_pct` used psutil's per-object `cpu_percent()`, which returns 0
+the first time it sees a process. With ~1 s heartbeats and 1–3 s jobs, most job CPU was
+missed and reported as *foreign* (Workers view: "CPU (DWR jobs) 0%" with two jobs running), so
+host-busy (§7.2) could count our own jobs as other programs.
+Decision: `TelemetrySampler` sums each job tree's CPU-time growth since the previous sample
+(a process created since then counts in full) and divides by the wall interval × cores.
+Measured on fog-1 under load: host 52%, own 50%, foreign 2%. CPU of a job that exits
+between two samples is still missed (it shows as foreign for one sample).
+Alternatives rejected: sampling more often (more load, same first-sample blind spot).
+Plan §: 5.2, 7.2.

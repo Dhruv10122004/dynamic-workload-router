@@ -28,6 +28,9 @@ what the API returns.
   says its figures are the last reported ones.
 - One failing poll must not blank the page (AC-5.3).
 - No external resources at runtime (system fonts only): the demo may be offline.
+- CSS class names are global: never reuse a base name (`.bar`, `.panel`, …) for a new meaning
+  (a `.bar` progress bar once collapsed the header on every tab). Buttons: `.btn` +
+  `primary | danger | ghost | tiny | wide`. Check layout at 1366 px and 1920 px.
 - `dist/` and `node_modules/` are not committed.
 
 ## Test

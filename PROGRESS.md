@@ -45,7 +45,7 @@ M1 and M2 passed on hardware 2026-11-15.
 - [x] dispatch overhead cut ~2.1 → ~0.8 s per job; load from slot time (D-026, owner to confirm)
 - [ ] reference, pilot, full sweep, ablation on hardware — owner (≈ 7 h, mains power)
 - AC-6.1 PASS; AC-6.2 PASS (local); AC-6.3 NOT RUN
-- Tests: `.\.venv\Scripts\python -m pytest` → 275 passed; `npm run lint` clean
+- Tests: `.\.venv\Scripts\python -m pytest` → 277 passed; `npm run lint` clean
 
 ## Classroom Playground — DONE (owner review pending)
 - [x] `#Playground` tab: presets + custom activities, live lanes (PID, cores, CPU%, RAM),
@@ -53,6 +53,8 @@ M1 and M2 passed on hardware 2026-11-15.
       scoreboard + comparison, presenter mode (D-027, D-028)
 - [x] run on both laptops: every preset, Wi-Fi disconnect, both-busy — docs/evidence/playground.md
 - `experiments/reference.json` measured on mains (2026-11-21); Linux laptop was on battery
+- [x] layout cleaned up (header clash fixed, even grids, one button style) and own-CPU telemetry
+      fixed (D-029: jobs no longer counted as foreign CPU)
 
 ## Next step
 Owner: verify the M3–M5 hardware results and the playground (evidence files), decide D-026
